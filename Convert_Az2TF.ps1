@@ -82,7 +82,7 @@ Function GetTFVirtualNetworks($Obj) {
     "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
     "$($SP2)address_space            = ["
 
-    ForEach($AddressSpace In $Obj.AddressSpaces) {
+    ForEach ($AddressSpace In $Obj.AddressSpaces) {
         $Global:TFResources += "`"$($AddressSpace.AddressSufixes -join ',')`""
     }
     
@@ -109,15 +109,15 @@ Function GetTFNetInterface($Obj) {
     "$($SP2)resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
     "$($SP2)location            = `"$($Obj.Location)`"" + $NL
 
-    ForEach($IPConfig In $Obj.IPConfigs) {
+    ForEach ($IPConfig In $Obj.IPConfigs) {
         $Split = $IPConfig.subnetId -split '/'
-        $SubnetName = $Split[$Split.Count-1]
+        $SubnetName = $Split[$Split.Count - 1]
 
         $Global:TFResources += "$($SP2)ip_configuration {" + $NL +
-            "$($SP2)$($SP2)name                          = `"$($IPConfig.Name)`"" + $NL +
-            "$($SP2)$($SP2)subnet_id                     = azurerm_subnet.subnet_$($SubnetName)" + $NL +
-            "$($SP2)$($SP2)private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`"" + $NL +
-            "$($SP2)}"
+        "$($SP2)$($SP2)name                          = `"$($IPConfig.Name)`"" + $NL +
+        "$($SP2)$($SP2)subnet_id                     = azurerm_subnet.subnet_$($SubnetName)" + $NL +
+        "$($SP2)$($SP2)private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`"" + $NL +
+        "$($SP2)}"
     }
     
     $Global:TFResources += "}" + $NL
@@ -137,9 +137,9 @@ Function GetTFWindowsVM($Obj) {
     "$($SP2)admin_password        = `"$($Obj.Name)`"" + $NL +
     "$($SP2)network_interface_ids = ["
     
-    ForEach($Nic In $Nics) {
+    ForEach ($Nic In $Nics) {
         $Split = $Nic.NicId -split '/'
-        $NicName = $Split[$Split.count-1]
+        $NicName = $Split[$Split.count - 1]
         $Global:TFResources += "azurerm_network_interface.nic_$($NicName)" -join ','
     }
     
@@ -189,24 +189,24 @@ ForEach ($Resource In $Resources) {
                     Location = $Resource.location
                 }
                 AddressSpaces = @()
-                Subnets = @()
-                Peerings = @()
+                Subnets       = @()
+                Peerings      = @()
             }
 
-            ForEach($AddressSpace In $AddressSpaces) {
+            ForEach ($AddressSpace In $AddressSpaces) {
                 $Obj.AddressSpaces += [PSCustomObject]@{
                     AddressSufixes = $AddressSpace.addressPrefixes
                 }
             }
 
-            ForEach($Subnet In $Subnets) {
+            ForEach ($Subnet In $Subnets) {
                 $SubnetProperties = $Subnet.Properties
 
                 $Obj.Subnets += [PSCustomObject]@{
-                    Id = $Subnet.id
-                    Name = $Subnet.name
-                    AddressPrefix = $SubnetProperties.addressPrefix
-                    ResourceGroup = [PSCustomObject]@{
+                    Id                 = $Subnet.id
+                    Name               = $Subnet.name
+                    AddressPrefix      = $SubnetProperties.addressPrefix
+                    ResourceGroup      = [PSCustomObject]@{
                         Id       = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
                         Name     = $Resource.resourceGroup
                         Location = $Resource.location
@@ -232,19 +232,19 @@ ForEach ($Resource In $Resources) {
                     Name     = $Resource.resourceGroup
                     Location = $Resource.location
                 }
-                IPConfigs = @()
+                IPConfigs     = @()
             }
 
-            ForEach($IPConfig In $IPConfigs) {
+            ForEach ($IPConfig In $IPConfigs) {
                 $IPProperties = $IPConfig.Properties
 
                 $Obj.IPConfigs += [PSCustomObject]@{
-                    name = $IPConfig.Name
+                    name                      = $IPConfig.Name
                     privateIPAllocationMethod = $IPProperties.privateIPAllocationMethod
-                    privateIPAddress = $IPProperties.privateIPAddress
-                    primary = $IPProperties.primary
-                    privateIPAddressVersion = $IPProperties.privateIPAddressVersion
-                    subnetId = $IPProperties.subnet.Id
+                    privateIPAddress          = $IPProperties.privateIPAddress
+                    primary                   = $IPProperties.primary
+                    privateIPAddressVersion   = $IPProperties.privateIPAddressVersion
+                    subnetId                  = $IPProperties.subnet.Id
                 }
             }
             
@@ -265,11 +265,11 @@ ForEach ($Resource In $Resources) {
                     Name     = $Resource.resourceGroup
                     Location = $Resource.location
                 }
-                Size = $Properties.hardwareProfile.vmSize
-                Nics = @()
+                Size          = $Properties.hardwareProfile.vmSize
+                Nics          = @()
             }
 
-            ForEach($Nic In $Nics) {
+            ForEach ($Nic In $Nics) {
                 $Obj.Nics += [PSCustomObject]@{
                     NicId = $Nic.id
                 }                
@@ -290,12 +290,12 @@ Write-Host "[$(Get-Date)] Generating terraform files..."
 $null = New-Item -Name $TFDirectory -Path (Get-Location).Path -Type Directory -Force
 $null = New-Item -Name $TFMainFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value (GetTFAzProvider) -Force
 
-$AllRGs.Values           | ForEach-Object { GetTFResourceGroup($_)   }
-$AllSTGs.Values          | ForEach-Object { GetTFStorageAccount($_)  }
-$AllVNets.Values         | ForEach-Object { GetTFVirtualNetworks($_) }
-$AllVNets.Values.Subnets | ForEach-Object { GetTFSubnets($_)         }
-$AllNICs.Values          | ForEach-Object { GetTFNetInterface($_)    }
-$AllVMs.Values           | ForEach-Object { GetTFWindowsVM($_)       }
+$AllRGs.Values | ForEach-Object { GetTFResourceGroup($_) }
+$AllSTGs.Values | ForEach-Object { GetTFStorageAccount($_) }
+$AllVNets.Values | ForEach-Object { GetTFVirtualNetworks($_) }
+$AllVNets.Values.Subnets | ForEach-Object { GetTFSubnets($_) }
+$AllNICs.Values | ForEach-Object { GetTFNetInterface($_) }
+$AllVMs.Values | ForEach-Object { GetTFWindowsVM($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 
