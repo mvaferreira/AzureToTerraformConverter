@@ -25,7 +25,7 @@ Disclaimer
 #>
 
 Param(
-    [Parameter(Mandatory=$True)]
+    [Parameter(Mandatory = $True)]
     $SubscriptionID = ""
 )
 
@@ -34,96 +34,96 @@ $Resources = az graph query -q  "resources | where subscriptionId == '$Subscript
 $TFDirectory = "terraform"
 $TFMainFile = "main.tf"
 $TFResourcesFile = "resources.tf"
-$AllRGs = @{}
-$AllVMs = @{}
-$AllSTGs = @{}
+$AllRGs = @{ }
+$AllVMs = @{ }
+$AllSTGs = @{ }
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
 $SP2 = "  "
 
 Function GetTFAzProvider() {
-    $TF_AzProvider = "provider `"azurerm`" {" ` + $NL +
-                      "$($SP2)version = `"~> 2.21`"" ` + $NL +
-                      "$($SP2)features {}" ` + $NL +
-                      "}" + $NL
+    $TF_AzProvider = "provider `"azurerm`" {" + $NL +
+    "$($SP2)version = `"~> 2.21`"" + $NL +
+    "$($SP2)features {}" + $NL +
+    "}" + $NL
     
     Return $TF_AzProvider
 }
 
 Function GetTFResourceGroup($Obj) {
-    $Global:TFResources += "resource `"azurerm_resource_group`" `"rg_$($Obj.Name)`" {" ` + $NL +
-                "$($SP2)name     = `"$($Obj.Name)`"" ` + $NL +
-                "$($SP2)location = `"$($Obj.Location)`"" ` + $NL +
-                "}" + $NL
+    $Global:TFResources += "resource `"azurerm_resource_group`" `"rg_$($Obj.Name)`" {" + $NL +
+    "$($SP2)name     = `"$($Obj.Name)`"" + $NL +
+    "$($SP2)location = `"$($Obj.Location)`"" + $NL +
+    "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_resource_group.rg_$($Obj.Name) $($Obj.Id)"  
 }
 
 Function GetTFStorageAccount($Obj) {
-    $Global:TFResources += "resource `"azurerm_storage_account`" `"stg_$($Obj.Name)`" {" ` + $NL +
-                "$($SP2)name                     = `"$($Obj.Name)`"" ` + $NL +
-                "$($SP2)resource_group_name      = `"$($Obj.ResourceGroup.Name)`"" ` + $NL +
-                "$($SP2)location                 = `"$($Obj.Location)`"" ` + $NL +
-                "$($SP2)account_tier             = `"$($Obj.AccountTier)`"" ` + $NL +
-                "$($SP2)account_replication_type = `"$($Obj.AccountReplicationType)`"" ` + $NL +
-                "}" + $NL
+    $Global:TFResources += "resource `"azurerm_storage_account`" `"stg_$($Obj.Name)`" {" + $NL +
+    "$($SP2)name                     = `"$($Obj.Name)`"" + $NL +
+    "$($SP2)resource_group_name      = `"$($Obj.ResourceGroup.Name)`"" + $NL +
+    "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
+    "$($SP2)account_tier             = `"$($Obj.AccountTier)`"" + $NL +
+    "$($SP2)account_replication_type = `"$($Obj.AccountReplicationType)`"" + $NL +
+    "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_storage_account.stg_$($Obj.Name) $($Obj.Id)"  
 }
 
 Function GetTFWindowsVM($Obj) {
-    $Global:TFResources += "resource `"azurerm_windows_virtual_machine`" `"vm_$($Obj.Name)`" {" ` + $NL +
-                "$($SP2)name                = `"$($Obj.Name)`"" ` + $NL +
-                "$($SP2)resource_group_name = `"$($Obj.ResourceGroup.Name)`"" ` + $NL +
-                "$($SP2)location            = `"$($Obj.Location)`"" ` + $NL +
-                "$($SP2)size                = `"$($Obj.Size)`"" ` + $NL +
-                "}" + $NL
+    $Global:TFResources += "resource `"azurerm_windows_virtual_machine`" `"vm_$($Obj.Name)`" {" + $NL +
+    "$($SP2)name                = `"$($Obj.Name)`"" + $NL +
+    "$($SP2)resource_group_name = `"$($Obj.ResourceGroup.Name)`"" + $NL +
+    "$($SP2)location            = `"$($Obj.Location)`"" + $NL +
+    "$($SP2)size                = `"$($Obj.Size)`"" + $NL +
+    "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_windows_virtual_machine.vm_$($Obj.Name) $($Obj.Id)"
 }
 
-ForEach($Resource In $Resources) {
+ForEach ($Resource In $Resources) {
     $Type = $Resource.Type
 
-    Switch($Type) {
+    Switch ($Type) {
         'microsoft.storage/storageaccounts' {
             $Properties = $Resource.Properties
 
             $Obj = [PSCustomObject]@{
-                Id = $Resource.Id
-                Name = $Resource.Name
-                Location = $Resource.location
-                ResourceGroup = [PSCustomObject]@{
-                    Id = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                    Name = $Resource.resourceGroup
+                Id                     = $Resource.Id
+                Name                   = $Resource.Name
+                Location               = $Resource.location
+                ResourceGroup          = [PSCustomObject]@{
+                    Id       = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name     = $Resource.resourceGroup
                     Location = $Resource.location
                 }
-                AccountTier = ($Resource.sku.name -split "_")[0]
+                AccountTier            = ($Resource.sku.name -split "_")[0]
                 AccountReplicationType = ($Resource.sku.name -split "_")[1]     
             }
 
-            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id,$Obj.ResourceGroup) }
-            If (-Not $AllSTGs.Contains($Obj.Id)) { $AllSTGs.Add($Obj.Id,$Obj) }
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllSTGs.Contains($Obj.Id)) { $AllSTGs.Add($Obj.Id, $Obj) }
         }
 
         'microsoft.compute/virtualmachines' {
             $Properties = $Resource.Properties
 
             $Obj = [PSCustomObject]@{
-                Id = $Resource.Id
-                Name = $Resource.Name
-                Location = $Resource.location
+                Id            = $Resource.Id
+                Name          = $Resource.Name
+                Location      = $Resource.location
                 ResourceGroup = [PSCustomObject]@{
-                    Id = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                    Name = $Resource.resourceGroup
+                    Id       = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name     = $Resource.resourceGroup
                     Location = $Resource.location
                 }
-                Size = $Properties.hardwareProfile.vmSize
+                Size          = $Properties.hardwareProfile.vmSize
             }
         
-            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id,$Obj.ResourceGroup) }
-            If (-Not $AllVMs.Contains($Obj.Id)) { $AllVMs.Add($Obj.Id,$Obj) }
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllVMs.Contains($Obj.Id)) { $AllVMs.Add($Obj.Id, $Obj) }
         }
     }
 
@@ -137,9 +137,9 @@ Write-Host "[$(Get-Date)] Generating terraform files..."
 $null = New-Item -Name $TFDirectory -Path (Get-Location).Path -Type Directory -Force
 $null = New-Item -Name $TFMainFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value (GetTFAzProvider) -Force
 
-$AllRGs.Values | %{GetTFResourceGroup($_)}
-$AllSTGs.Values | %{GetTFStorageAccount($_)}
-$AllVMs.Values | %{GetTFWindowsVM($_)}
+$AllRGs.Values | ForEach-Object { GetTFResourceGroup($_) }
+$AllSTGs.Values | ForEach-Object { GetTFStorageAccount($_) }
+$AllVMs.Values | ForEach-Object { GetTFWindowsVM($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 
