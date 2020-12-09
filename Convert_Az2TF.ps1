@@ -96,7 +96,7 @@ Function GetTFSubnets($Obj) {
     $Global:TFResources += "resource `"azurerm_subnet`" `"subnet_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                 = `"$($Obj.Name)`"" + $NL +
     "$($SP2)resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName)" + $NL +
+    "$($SP2)virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName).name" + $NL +
     "$($SP2)address_prefixes     = [`"$($Obj.AddressPrefix)`"]" + $NL +
     "}" + $NL
 
