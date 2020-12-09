@@ -66,7 +66,7 @@ Function GetTFResourceGroup($Obj) {
 Function GetTFStorageAccount($Obj) {
     $Global:TFResources += "resource `"azurerm_storage_account`" `"stg_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                     = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
+    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
     "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
     "$($SP2)account_tier             = `"$($Obj.AccountTier)`"" + $NL +
     "$($SP2)account_replication_type = `"$($Obj.AccountReplicationType)`"" + $NL +
@@ -78,7 +78,7 @@ Function GetTFStorageAccount($Obj) {
 Function GetTFVirtualNetworks($Obj) {
     $Global:TFResources += "resource `"azurerm_virtual_network`" `"vnet_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                     = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
+    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
     "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
     "$($SP2)address_space            = ["
 
@@ -95,7 +95,7 @@ Function GetTFVirtualNetworks($Obj) {
 Function GetTFSubnets($Obj) {
     $Global:TFResources += "resource `"azurerm_subnet`" `"subnet_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                 = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
+    "$($SP2)resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
     "$($SP2)virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName)" + $NL +
     "$($SP2)address_prefixes     = [`"$($Obj.AddressPrefix)`"]" + $NL +
     "}" + $NL
@@ -106,7 +106,7 @@ Function GetTFSubnets($Obj) {
 Function GetTFNetInterface($Obj) {
     $Global:TFResources += "resource `"azurerm_network_interface`" `"nic_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
+    "$($SP2)resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
     "$($SP2)location            = `"$($Obj.Location)`"" + $NL
 
     ForEach ($IPConfig In $Obj.IPConfigs) {
@@ -115,7 +115,7 @@ Function GetTFNetInterface($Obj) {
 
         $Global:TFResources += "$($SP2)ip_configuration {" + $NL +
         "$($SP2)$($SP2)name                          = `"$($IPConfig.Name)`"" + $NL +
-        "$($SP2)$($SP2)subnet_id                     = azurerm_subnet.subnet_$($SubnetName)" + $NL +
+        "$($SP2)$($SP2)subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
         "$($SP2)$($SP2)private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`"" + $NL +
         "$($SP2)}"
     }
@@ -130,7 +130,7 @@ Function GetTFWindowsVM($Obj) {
 
     $Global:TFResources += "resource `"azurerm_windows_virtual_machine`" `"vm_$($Obj.Name)`" {" + $NL +
     "$($SP2)name                  = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name   = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name)" + $NL +
+    "$($SP2)resource_group_name   = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
     "$($SP2)location              = `"$($Obj.Location)`"" + $NL +
     "$($SP2)size                  = `"$($Obj.Size)`"" + $NL +
     "$($SP2)admin_username        = `"$($Obj.Name)`"" + $NL +
@@ -140,7 +140,7 @@ Function GetTFWindowsVM($Obj) {
     ForEach ($Nic In $Nics) {
         $Split = $Nic.NicId -split '/'
         $NicName = $Split[$Split.count - 1]
-        $Global:TFResources += "azurerm_network_interface.nic_$($NicName)" -join ','
+        $Global:TFResources += "azurerm_network_interface.nic_$($NicName).id" -join ','
     }
     
     $Global:TFResources += "]" + $NL +
