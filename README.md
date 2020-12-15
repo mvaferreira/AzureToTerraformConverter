@@ -7,6 +7,20 @@ Convert Azure resources to Terraform files
 
 Usage: .\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
 
+Supported Azure resources (under development...):
+
+```
+resourcegroups
+microsoft.storage/storageaccounts
+microsoft.network/publicipaddresses
+microsoft.network/virtualnetworks
+microsoft.network/virtualnetworks/subnets
+microsoft.network/networkinterfaces
+microsoft.compute/availabilitysets
+microsoft.compute/virtualmachines (Windows so far)
+microsoft.compute/disks
+```
+
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**
 ```
 [12/15/2020 17:21:48] Checking tool dependencies...
