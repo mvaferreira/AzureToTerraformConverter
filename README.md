@@ -3,6 +3,7 @@ Convert Azure resources to Terraform files
 
 .\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
 
+```
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**
 [12/15/2020 17:21:48] Checking tool dependencies...
 [12/15/2020 17:22:01] Finding resources in subscription <my_subscription_ID>...
@@ -196,3 +197,4 @@ resource "azurerm_managed_disk" "disk_notuseddisk_1" {
 }
 
 PS C:\terraform>
+```
