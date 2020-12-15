@@ -13,51 +13,95 @@ Disclaimer
     
     .SYNOPSIS
         Author: Marcus Ferreira marcus.ferreira[at]microsoft[dot]com
-        Version: 0.1
+        Version: 0.2
 
     .DESCRIPTION
-	    This script will read Azure resources via "Azure CLI" and convert resources to Terraform files.
+        This script will read Azure resources via "Azure CLI" and convert resources to Terraform files.
+        
+        Required: az cli and az graph
+                  install az graph with: # az extension add --name resource-graph
+
+        Supported Azure resources:
+
+        resourcegroups
+        microsoft.storage/storageaccounts
+        microsoft.network/publicipaddresses
+        microsoft.network/virtualnetworks
+        microsoft.network/virtualnetworks/subnets
+        microsoft.network/networkinterfaces
+        microsoft.compute/availabilitysets
+        microsoft.compute/virtualmachines
+        microsoft.compute/disks
     
     .EXAMPLE
-        Run script with -SubscriptionsID parameter.
+        Run script with -SubscriptionID parameter.
 
-        .\Convert_Az2TF.ps1 -SubscriptionsID @("<my_subscription_ID1>","<my_subscription_ID2>")
+        .\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
+
+        Before importing the resources into Terraform state, set the subscription ID as default.
+
+        # az account set --subscription "<my_subscription_ID>"
 #>
 
 Param(
     [Parameter(Mandatory = $True)]
-    $SubscriptionsID = @()
+    $SubscriptionID = @()
 )
+
+Function CheckDeps() {
+    Write-Host "[$(Get-Date)] Checking tool dependencies..."
+
+    $azcli = az --version
+    If ($null -eq $azcli) {
+        throw "[$(Get-Date)] Azure Cli not found!"
+        $host.Exit()
+    }
+
+    $azcliExt = az extension list --output json | ConvertFrom-Json
+    If ($azcliExt.name -notin 'resource-graph') {
+        throw "[$(Get-Date)] Azure CLI Resource graph not found. Please install it with: az extension add --name resource-graph"
+        $host.Exit()    
+    }
+
+    $tf = terraform version
+    If ($null -eq $tf) {
+        throw "[$(Get-Date)] Missing Terraform binary. Please download it @ https://www.terraform.io/downloads.html"
+        $host.Exit()        
+    }
+}
+
+CheckDeps
 
 $Resources = @()
 $ResourceGroups = @()
 
-ForEach($SubscriptionID In $SubscriptionsID) {
-    Write-Host "[$(Get-Date)] Finding resources in subscription $($SubscriptionID)..."
-    $Resources += az graph query -q  "resources | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
-    $ResourceGroups += az graph query -q  "resourceContainers | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
-}
-
-$DiskResources = $Resources | Where-Object {$_.Type -eq 'microsoft.compute/disks'}
+Write-Host "[$(Get-Date)] Finding resources in subscription $($SubscriptionID)..."
+$Resources = az graph query -q "resources | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
+$ResourceGroups = az graph query -q "resourceContainers | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
 
 $TFDirectory = "terraform"
 $TFMainFile = "main.tf"
 $TFResourcesFile = "resources.tf"
+$TFImportFile = "terraform_import.cmd"
 $AllRGs = @{ }
 $AllNICs = @{ }
 $AllSTGs = @{ }
 $AllVMs = @{ }
 $AllVNets = @{ }
 $AllDisks = @{ }
+$AllPIPs = @{ }
+$AllAVSets = @{ }
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
-$SP2 = "  "
+
+$Global:TFImport += "terraform init"
+$Global:TFImport += "terraform validate"
 
 Function GetTFAzProvider() {
     $TF_AzProvider = "provider `"azurerm`" {" + $NL +
-    "$($SP2)version = `"~> 2.21`"" + $NL +
-    "$($SP2)features {}" + $NL +
+    "  version = `"~> 2.21`"" + $NL +
+    "  features {}" + $NL +
     "}" + $NL
     
     Return $TF_AzProvider
@@ -65,73 +109,214 @@ Function GetTFAzProvider() {
 
 Function GetTFResourceGroup($Obj) {
     $Global:TFResources += "resource `"azurerm_resource_group`" `"rg_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name     = `"$($Obj.Name)`""
+    "  name     = `"$($Obj.Name)`""
 
     $RG = $ResourceGroups | Where-Object {$_.id -eq $Obj.Id}
 
-    $Global:TFResources += "$($SP2)location = `"$($RG.location)`"" + $NL +
-    "}" + $NL
+    $Global:TFResources += "  location = `"$($RG.location)`""
+
+    $TagNames = $RG.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($RG.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_resource_group.rg_$($Obj.Name) $($Obj.Id)"  
 }
 
 Function GetTFStorageAccount($Obj) {
     $Global:TFResources += "resource `"azurerm_storage_account`" `"stg_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                     = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
-    "$($SP2)account_tier             = `"$($Obj.AccountTier)`"" + $NL +
-    "$($SP2)account_replication_type = `"$($Obj.AccountReplicationType)`"" + $NL +
-    "}" + $NL
+        "  name                     = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location                 = `"$($Obj.Location)`"" + $NL +
+        "  account_tier             = `"$($Obj.AccountTier)`"" + $NL +
+        "  account_kind             = `"$($Obj.AccountKind)`"" + $NL +
+        "  account_replication_type = `"$($Obj.AccountReplicationType)`""
+
+    If ($Obj.AllowBlobPublicAccess) {
+        $Global:TFResources += "  allow_blob_public_access = $($Obj.AllowBlobPublicAccess.ToString().ToLower())"
+    }
+
+    If ($Obj.MinimumTlsVersion) {
+        $Global:TFResources += "  min_tls_version          = `"$($Obj.MinimumTlsVersion)`""
+    }
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_storage_account.stg_$($Obj.Name) $($Obj.Id)"  
 }
 
-Function GetTFVirtualNetworks($Obj) {
+Function GetTFVirtualNetwork($Obj) {
     $Global:TFResources += "resource `"azurerm_virtual_network`" `"vnet_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                     = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name      = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)location                 = `"$($Obj.Location)`"" + $NL +
-    "$($SP2)address_space            = ["
+        "  name                = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location            = `"$($Obj.Location)`"" + $NL +
+        "  address_space       = [`"$($Obj.AddressSpaces.AddressSufixes -join '`",`"')`"]" + $NL +
+        "  dns_servers         = [`"$($Obj.DnsServers -join '`",`"')`"]"
 
-    ForEach ($AddressSpace In $Obj.AddressSpaces) {
-        $Global:TFResources += "`"$($AddressSpace.AddressSufixes -join ',')`""
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
     }
-    
-    $Global:TFResources += "]" + $NL +
-    "}" + $NL
+
+    $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_virtual_network.vnet_$($Obj.Name) $($Obj.Id)"  
 }
 
-Function GetTFSubnets($Obj) {
+Function GetTFSubnet($Obj) {
     $Global:TFResources += "resource `"azurerm_subnet`" `"subnet_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                 = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName).name" + $NL +
-    "$($SP2)address_prefixes     = [`"$($Obj.AddressPrefix)`"]" + $NL +
-    "}" + $NL
+        "  name                 = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName).name" + $NL +
+        "  address_prefixes     = [`"$($Obj.AddressPrefix -join '`",`"')`"]"
+
+    If($Obj.ServiceEndpoints) {
+        $Global:TFResources += "  service_endpoints    = [`"$($Obj.ServiceEndpoints.service -join '`",`"')`"]"
+    }
+
+    $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_subnet.subnet_$($Obj.Name) $($Obj.Id)"     
 }
 
+Function GetTFPublicIP($Obj) {
+    $Global:TFResources += "resource `"azurerm_public_ip`" `"pip_$($Obj.Name)`" {" + $NL +
+        "  name                    = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name     = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location                = `"$($Obj.Location)`"" + $NL +
+        "  allocation_method       = `"$($Obj.AllocationMethod)`"" + $NL +
+        "  sku                     = `"$($Obj.SkuName)`"" + $NL +
+        "  ip_version              = `"$($Obj.PublicIPAddressVersion)`"" + $NL +
+        "  idle_timeout_in_minutes = `"$($Obj.IdleTimeoutInMinutes)`""
+
+    If ($Obj.DomainDNSLabel) {
+        $Global:TFResources += "  domain_name_label       = `"$($Obj.DomainDNSLabel)`""
+    }
+    
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_public_ip.pip_$($Obj.Name) $($Obj.Id)"    
+}
+
+Function GetTFAvailSet($Obj) {
+    If($Obj.Sku -eq "Aligned") { $IsManaged = $True } Else { $IsManaged = $False }
+
+    $Global:TFResources += "resource `"azurerm_availability_set`" `"avset_$($Obj.Name)`" {" + $NL +
+        "  name                         = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name          = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location                     = `"$($Obj.Location)`"" + $NL +
+        "  managed                      = $($IsManaged.toString().ToLower())" + $NL +
+        "  platform_fault_domain_count  = `"$($Obj.PlatformFaultDomainCount)`"" + $NL +
+        "  platform_update_domain_count = `"$($Obj.PlatformUpdateDomainCount)`""
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_availability_set.avset_$($Obj.Name) $($Obj.Id)" 
+}
+
 Function GetTFNetInterface($Obj) {
     $Global:TFResources += "resource `"azurerm_network_interface`" `"nic_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)location            = `"$($Obj.Location)`"" + $NL
+        "  name                = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location            = `"$($Obj.Location)`"" + $NL
 
+    $I = 1
     ForEach ($IPConfig In $Obj.IPConfigs) {
         $Split = $IPConfig.subnetId -split '/'
         $SubnetName = $Split[$Split.Count - 1]
+        $PIP = $AllPIPs.Values | Where-Object {$_.Id -eq $IPConfig.PublicIPId}
 
-        $Global:TFResources += "$($SP2)ip_configuration {" + $NL +
-        "$($SP2)$($SP2)name                          = `"$($IPConfig.Name)`"" + $NL +
-        "$($SP2)$($SP2)subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
-        "$($SP2)$($SP2)private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`"" + $NL +
-        "$($SP2)}"
+        If($I -ne $Obj.IPConfigs.Count) {
+            $Global:TFResources += "  ip_configuration {" + $NL +
+                "    name                          = `"$($IPConfig.Name)`"" + $NL +
+                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
+                "    private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`""
+        
+                If($PIP) {
+                    $Global:TFResources += "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id"
+                }
+
+                $Global:TFResources += "  }" + $NL
+        } Else {
+            $Global:TFResources += "  ip_configuration {" + $NL +
+                "    name                          = `"$($IPConfig.Name)`"" + $NL +
+                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
+                "    private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`""
+
+                If($PIP) {
+                    $Global:TFResources += "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id"
+                }
+
+                $Global:TFResources += "  }"
+        }
+
+        $I++
     }
     
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
     $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_network_interface.nic_$($Obj.Name) $($Obj.Id)"
@@ -139,12 +324,12 @@ Function GetTFNetInterface($Obj) {
 
 Function GetTFManagedDisk($Obj) {
     $Global:TFResources += "resource `"azurerm_managed_disk`" `"disk_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                 = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)location             = `"$($Obj.Location)`"" + $NL +
-    "$($SP2)resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)storage_account_type = `"$($Obj.StorageAccountType)`"" + $NL +
-    "$($SP2)create_option        = `"$($Obj.CreateOption)`"" + $NL +
-    "$($SP2)disk_size_gb         = `"$($Obj.SizeGB)`""
+        "  name                 = `"$($Obj.Name)`"" + $NL +
+        "  location             = `"$($Obj.Location)`"" + $NL +
+        "  resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  storage_account_type = `"$($Obj.StorageAccountType)`"" + $NL +
+        "  create_option        = `"$($Obj.CreateOption)`"" + $NL +
+        "  disk_size_gb         = `"$($Obj.SizeGB)`""
 
     $Global:TFResources += "}" + $NL
 
@@ -156,48 +341,65 @@ Function GetTFDataDiskAttachment($Obj) {
     $VMDataDisks = $VM.properties.storageprofile.dataDisks
 
     $Global:TFResources += "resource `"azurerm_virtual_machine_data_disk_attachment`" `"disk_att_$($Obj.Name)`" {" + $NL +
-    "$($SP2)managed_disk_id    = azurerm_managed_disk.disk_$($Obj.Name).id" + $NL +
-    "$($SP2)virtual_machine_id = azurerm_windows_virtual_machine.vm_$($VM.name).id" + $NL +
-    "$($SP2)lun                = $($VMDataDisks.lun)" + $NL +
-    "$($SP2)caching            = `"$($VMDataDisks.caching)`"" + $NL +
-    "}" + $NL
+        "  managed_disk_id    = azurerm_managed_disk.disk_$($Obj.Name).id" + $NL +
+        "  virtual_machine_id = azurerm_windows_virtual_machine.vm_$($VM.name).id" + $NL +
+        "  lun                = $($VMDataDisks.lun)" + $NL +
+        "  caching            = `"$($VMDataDisks.caching)`"" + $NL +
+        "}" + $NL
 
-    $Global:TFImport += "terraform import azurerm_virtual_machine_data_disk_attachment.disk_att_$($Obj.Name) $($Obj.Id)"    
+    $DiskAttId = "$($VM.Id)/dataDisks/$($Obj.Name)"
+    $Global:TFImport += "terraform import azurerm_virtual_machine_data_disk_attachment.disk_att_$($Obj.Name) $($DiskAttId)"    
 }
 
 Function GetTFWindowsVM($Obj) {
     $Nics = $Obj.Nics
+    $AvSet = $AllAVSets.Values | Where-Object {$_.Id -eq $Obj.AvailabilitySetId}
 
     $Global:TFResources += "resource `"azurerm_windows_virtual_machine`" `"vm_$($Obj.Name)`" {" + $NL +
-    "$($SP2)name                  = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)resource_group_name   = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-    "$($SP2)location              = `"$($Obj.Location)`"" + $NL +
-    "$($SP2)size                  = `"$($Obj.Size)`"" + $NL +
-    "$($SP2)admin_username        = `"$($Obj.AdminUsername)`"" + $NL +
-    "$($SP2)admin_password        = `"$($Obj.Name)`"" + $NL +
-    "$($SP2)network_interface_ids = ["
+        "  name                  = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name   = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location              = `"$($Obj.Location)`"" + $NL +
+        "  size                  = `"$($Obj.Size)`"" + $NL +
+        "  admin_username        = `"$($Obj.AdminUsername)`"" + $NL +
+        "  admin_password        = `"$($Obj.Name)`"" + $NL +
+        "  license_type          = `"$($Obj.LicenseType)`""
+
+    If ($AvSet) {
+        $Global:TFResources += "  availability_set_id   = azurerm_availability_set.avset_$($AvSet.Name).id"
+    }
+
+    If ($Obj.BootDiagnostics) {
+        $Global:TFResources += $NL + "  boot_diagnostics {" + $NL +
+        "    storage_account_uri = `"$($Obj.BootDiagnostics)`"" + $NL +
+        "  }"
+    }
+        
+    $Global:TFResources += $NL +"  network_interface_ids = ["
     
     ForEach ($Nic In $Nics) {
         $Split = $Nic.NicId -split '/'
         $NicName = $Split[$Split.count - 1]
-        $Global:TFResources += "$($SP2)$($SP2)azurerm_network_interface.nic_$($NicName).id" -join ','
+        $Global:TFResources += "    azurerm_network_interface.nic_$($NicName).id" -join ','
     }
     
-    $Global:TFResources += "$($SP2)]" + $NL
+    $Global:TFResources += "  ]" + $NL
 
     $OSDisk = $Obj.Disks | Where-Object {$_.OsType}
+    $OsDiskInfo = $Obj.OsDiskInfo
 
-    $Global:TFResources += "$($SP2)os_disk {" + $NL +
-    "$($SP2)$($SP2)caching              = `"ReadWrite`"" + $NL +
-    "$($SP2)$($SP2)storage_account_type = `"$($OSDisk.StorageAccountType)`"" + $NL +
-    "$($SP2)}" + $NL
+    $Global:TFResources += "  os_disk {" + $NL +
+        "    caching              = `"$($OsDiskInfo.caching)`"" + $NL +
+        "    storage_account_type = `"$($OSDisk.StorageAccountType)`"" + $NL +
+        "    disk_size_gb         = `"$($OSDisk.SizeGB)`"" + $NL +
+        "    name                 = `"$($OsDiskInfo.name)`"" + $NL +
+        "  }" + $NL
 
-    $Global:TFResources += "$($SP2)source_image_reference {" + $NL +
-    "$($SP2)$($SP2)publisher = `"$($Obj.Publisher)`"" + $NL +
-    "$($SP2)$($SP2)offer     = `"$($Obj.Offer)`"" + $NL +
-    "$($SP2)$($SP2)sku       = `"$($Obj.Sku)`"" + $NL +
-    "$($SP2)$($SP2)version   = `"$($Obj.Version)`"" + $NL +
-    "$($SP2)}"
+    $Global:TFResources += "  source_image_reference {" + $NL +
+        "    publisher = `"$($Obj.Publisher)`"" + $NL +
+        "    offer     = `"$($Obj.Offer)`"" + $NL +
+        "    sku       = `"$($Obj.Sku)`"" + $NL +
+        "    version   = `"$($Obj.Version)`"" + $NL +
+        "  }"
 
     $Global:TFResources += "}" + $NL
 
@@ -208,19 +410,67 @@ ForEach ($Resource In $Resources) {
     $Type = $Resource.Type
 
     Switch ($Type) {
+        'microsoft.compute/availabilitysets' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                        = $Resource.Id
+                Name                      = $Resource.Name
+                Location                  = $Resource.location
+                ResourceGroup             = [PSCustomObject]@{
+                    Id          	      = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name                  = $Resource.resourceGroup
+                }
+                Sku                       = $Resource.sku.name
+                PlatformFaultDomainCount  = $Properties.platformFaultDomainCount
+                PlatformUpdateDomainCount = $Properties.platformUpdateDomainCount
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllAVSets.Contains($Obj.Id)) { $AllAVSets.Add($Obj.Id, $Obj) }
+        }
+
+        'microsoft.network/publicipaddresses' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                     = $Resource.Id
+                Name                   = $Resource.Name
+                Location               = $Resource.location
+                ResourceGroup          = [PSCustomObject]@{
+                    Id          	   = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name               = $Resource.resourceGroup
+                }
+                AllocationMethod       = $Properties.publicIPAllocationMethod
+                IpAddress              = $Properties.ipAddress
+                IdleTimeoutInMinutes   = $Properties.idleTimeoutInMinutes
+                PublicIPAddressVersion = $Properties.publicIPAddressVersion
+                SkuName                = $Resource.sku.name
+                SkuTier                = $Resource.sku.tier
+                DomainDNSLabel         = $Properties.dnsSettings.domainNameLabel
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllPIPs.Contains($Obj.Id)) { $AllPIPs.Add($Obj.Id, $Obj) }
+        }
+
         'microsoft.storage/storageaccounts' {
             $Properties = $Resource.Properties
 
             $Obj = [PSCustomObject]@{
-                Id            = $Resource.Id
-                Name          = $Resource.Name
-                Location      = $Resource.location
-                ResourceGroup = [PSCustomObject]@{
-                    Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                    Name      = $Resource.resourceGroup
+                Id                     = $Resource.Id
+                Name                   = $Resource.Name
+                Location               = $Resource.location
+                ResourceGroup          = [PSCustomObject]@{
+                    Id          	   = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name               = $Resource.resourceGroup
                 }
                 AccountTier            = ($Resource.sku.name -split '_')[0]
-                AccountReplicationType = ($Resource.sku.name -split '_')[1]     
+                AccountReplicationType = ($Resource.sku.name -split '_')[1]
+                AccountKind            = $Resource.kind
+                Tags                   = $Resource.tags
+                MinimumTlsVersion      = $Properties.minimumTlsVersion
+                AllowBlobPublicAccess  = $Properties.allowBlobPublicAccess
             }
 
             If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
@@ -241,6 +491,8 @@ ForEach ($Resource In $Resources) {
                     Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
                     Name      = $Resource.resourceGroup
                 }
+                DnsServers    = $Properties.dhcpOptions.dnsServers
+                Tags          = $Resource.tags
                 AddressSpaces = @()
                 Subnets       = @()
                 Peerings      = @()
@@ -256,14 +508,15 @@ ForEach ($Resource In $Resources) {
                 $SubnetProperties = $Subnet.Properties
 
                 $Obj.Subnets += [PSCustomObject]@{
-                    Id            = $Subnet.id
-                    Name          = $Subnet.name
-                    AddressPrefix = $SubnetProperties.addressPrefix
-                    ResourceGroup = [PSCustomObject]@{
-                        Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                        Name      = $Resource.resourceGroup
+                    Id                 = $Subnet.id
+                    Name               = $Subnet.name
+                    AddressPrefix      = $SubnetProperties.addressPrefix
+                    ResourceGroup      = [PSCustomObject]@{
+                        Id             = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                        Name           = $Resource.resourceGroup
                     }
-                    VirtualNetworkName = $Resource.Name                 
+                    VirtualNetworkName = $Resource.Name
+                    ServiceEndpoints   = $SubnetProperties.serviceEndpoints          
                 }
             }
             
@@ -283,6 +536,7 @@ ForEach ($Resource In $Resources) {
                     Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
                     Name      = $Resource.resourceGroup
                 }
+                Tags          = $Resource.tags
                 IPConfigs     = @()
             }
 
@@ -290,12 +544,13 @@ ForEach ($Resource In $Resources) {
                 $IPProperties = $IPConfig.Properties
 
                 $Obj.IPConfigs += [PSCustomObject]@{
-                    name                      = $IPConfig.Name
-                    privateIPAllocationMethod = $IPProperties.privateIPAllocationMethod
-                    privateIPAddress          = $IPProperties.privateIPAddress
-                    primary                   = $IPProperties.primary
-                    privateIPAddressVersion   = $IPProperties.privateIPAddressVersion
-                    subnetId                  = $IPProperties.subnet.Id
+                    Name                      = $IPConfig.Name
+                    PrivateIPAllocationMethod = $IPProperties.privateIPAllocationMethod
+                    PrivateIPAddress          = $IPProperties.privateIPAddress
+                    Primary                   = $IPProperties.primary
+                    PrivateIPAddressVersion   = $IPProperties.privateIPAddressVersion
+                    SubnetId                  = $IPProperties.subnet.id
+                    PublicIPId                = $IPProperties.publicIPAddress.id
                 }
             }
             
@@ -306,24 +561,33 @@ ForEach ($Resource In $Resources) {
         'microsoft.compute/virtualmachines' {
             $Properties = $Resource.Properties
             $Nics = $Properties.networkProfile.networkinterfaces
-            $ImageReference = $Properties.storageProfile.imagereference
+            $StorageProfile = $Properties.storageProfile
+            $DiagProfile = $Properties.diagnosticsProfile
+            $ImageReference = $StorageProfile.imagereference
+            $OsDiskInfo = $StorageProfile.osDisk
+            $DiskResources = $Resources | Where-Object {$_.Type -eq 'microsoft.compute/disks'}
+            $VMDisks = $DiskResources | Where-Object {$_.managedBy -eq $Resource.Id}
 
             $Obj = [PSCustomObject]@{
-                Id            = $Resource.Id
-                Name          = $Resource.Name
-                Location      = $Resource.location
-                ResourceGroup = [PSCustomObject]@{
-                    Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                    Name      = $Resource.resourceGroup
+                Id                = $Resource.Id
+                Name              = $Resource.Name
+                Location          = $Resource.location
+                ResourceGroup     = [PSCustomObject]@{
+                    Id            = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name          = $Resource.resourceGroup
                 }
-                Size          = $Properties.hardwareProfile.vmSize
-                Nics          = @()
-                Disks         = @()
-                AdminUsername = $Properties.osProfile.adminUsername
-                Publisher     = $ImageReference.publisher
-                Offer         = $ImageReference.offer
-                Sku           = $ImageReference.sku
-                Version       = $ImageReference.version
+                Size              = $Properties.hardwareProfile.vmSize
+                Nics              = @()
+                Disks             = @()
+                AdminUsername     = $Properties.osProfile.adminUsername
+                Publisher         = $ImageReference.publisher
+                Offer             = $ImageReference.offer
+                Sku               = $ImageReference.sku
+                Version           = $ImageReference.version
+                LicenseType       = $Properties.licenseType
+                BootDiagnostics   = $DiagProfile.bootDiagnostics.storageUri
+                AvailabilitySetId = $Properties.availabilitySet.Id
+                OsDiskInfo        = $OSDiskInfo
             }
 
             ForEach ($Nic In $Nics) {
@@ -331,8 +595,6 @@ ForEach ($Resource In $Resources) {
                     NicId = $Nic.id
                 }                
             }
-
-            $VMDisks = $DiskResources | Where-Object {$_.managedBy -eq $Resource.Id}
 
             ForEach($VMDisk In $VMDisks) {
                 $Obj.Disks += [PSCustomObject]@{
@@ -344,11 +606,11 @@ ForEach ($Resource In $Resources) {
                     State              = $VMDisk.properties.diskState
                     OsType             = $VMDisk.properties.osType
                     StorageAccountType = $VMDisk.sku.name
-                    CreateOption       = "Empty"
+                    CreateOption       = $VMDisk.properties.creationData.createOption
                     ResourceGroup      = [PSCustomObject]@{
                         Id             = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
                         Name           = $Resource.resourceGroup
-                    }                    
+                    }            
                 }
             }
 
@@ -363,7 +625,6 @@ ForEach ($Resource In $Resources) {
         }
 
         'microsoft.compute/disks' {
-            #We only care for data disks
             If (-Not $Resource.properties.osType) {
                 $Obj = [PSCustomObject]@{
                     Id            = $Resource.Id
@@ -378,7 +639,7 @@ ForEach ($Resource In $Resources) {
                     State              = $Resource.properties.diskState
                     OsType             = $Resource.properties.osType
                     StorageAccountType = $Resource.sku.name
-                    CreateOption       = "Empty"                                
+                    CreateOption       = $Resource.properties.creationData.createOption                            
                 }          
 
                 If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
@@ -399,14 +660,19 @@ $null = New-Item -Name $TFMainFile -Path (Join-Path (Get-Location).Path $TFDirec
 
 $AllRGs.Values | ForEach-Object { GetTFResourceGroup($_) }
 $AllSTGs.Values | ForEach-Object { GetTFStorageAccount($_) }
-$AllVNets.Values | ForEach-Object { GetTFVirtualNetworks($_) }
-$AllVNets.Values.Subnets | ForEach-Object { GetTFSubnets($_) }
+$AllAVSets.Values | ForEach-Object { GetTFAvailSet($_) }
+$AllVNets.Values | ForEach-Object { GetTFVirtualNetwork($_) }
+$AllVNets.Values.Subnets | ForEach-Object { GetTFSubnet($_) }
+$AllPIPs.Values | ForEach-Object { GetTFPublicIP($_) }
 $AllNICs.Values | ForEach-Object { GetTFNetInterface($_) }
 $AllDisks.Values | ForEach-Object { GetTFManagedDisk($_) }
-$AllDisks.Values | Where-Object {$_.VMId} | ForEach-Object { GetTFDataDiskAttachment($_) }
 $AllVMs.Values | ForEach-Object { GetTFWindowsVM($_) }
+$AllDisks.Values | Where-Object {$_.VMId} | ForEach-Object { GetTFDataDiskAttachment($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 
 Write-Host "[$(Get-Date)] Indenting files..."
 $null = terraform fmt $TFDirectory
+
+Write-Host "[$(Get-Date)] Generating import file..."
+$null = New-Item -Name $TFImportFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFImport -Join $NL) -Force
