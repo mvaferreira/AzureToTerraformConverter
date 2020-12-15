@@ -5,7 +5,7 @@ Convert Azure resources to Terraform files
 ***after using it, make sure to use variables, modules, etc.***
 ***Always follow best practices. Use at your own risk. Test it in lab first.***
 
-.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
+Usage: .\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
 
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**
 ```
