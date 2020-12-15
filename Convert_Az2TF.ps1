@@ -30,7 +30,7 @@ Disclaimer
         microsoft.network/virtualnetworks/subnets
         microsoft.network/networkinterfaces
         microsoft.compute/availabilitysets
-        microsoft.compute/virtualmachines
+        microsoft.compute/virtualmachines (Windows so far)
         microsoft.compute/disks
     
     .EXAMPLE
