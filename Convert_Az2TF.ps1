@@ -91,6 +91,9 @@ $AllVNets = @{ }
 $AllDisks = @{ }
 $AllPIPs = @{ }
 $AllAVSets = @{ }
+$AllGWs = @{ }
+$AllLocalGWs = @{ }
+$AllGWConnections = @{ }
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
@@ -115,7 +118,7 @@ Function GetTFResourceGroup($Obj) {
 
     $Global:TFResources += "  location = `"$($RG.location)`""
 
-    $TagNames = $RG.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $RG.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -149,7 +152,7 @@ Function GetTFStorageAccount($Obj) {
         $Global:TFResources += "  min_tls_version          = `"$($Obj.MinimumTlsVersion)`""
     }
 
-    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -166,6 +169,151 @@ Function GetTFStorageAccount($Obj) {
     $Global:TFImport += "terraform import azurerm_storage_account.stg_$($Obj.Name) $($Obj.Id)"  
 }
 
+Function GetTFGatewayConnection($Obj) {
+    $LocalGW = $AllLocalGWs.Values | Where-Object {$_.Id -eq $Obj.LocalNetworkGatewayId}
+    $Gateway = $AllGWs.Values | Where-Object {$_.Id -eq $Obj.VirtualNetworkGatewayId}
+        
+    $Global:TFResources += "resource `"azurerm_virtual_network_gateway_connection`" `"gwcon_$($Obj.Name)`" {" + $NL +
+    "  name                         = `"$($Obj.Name)`"" + $NL +
+    "  resource_group_name          = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+    "  location                     = `"$($Obj.Location)`"" + $NL +
+    "  type                         = `"$($Obj.Type)`"" + $NL +
+    "  virtual_network_gateway_id   = azurerm_virtual_network_gateway.gw_$($Gateway.Name).id" + $NL +
+    "  local_network_gateway_id     = azurerm_local_network_gateway.lgw_$($LocalGW.Name).id" + $NL +
+    "  connection_protocol          = `"$($Obj.Protocol)`"" + $NL +
+    "  enable_bgp                   = $($Obj.EnableBgp.ToString().ToLower())" + $NL +
+    "  routing_weight               = `"$($Obj.RoutingWeight)`"" + $NL +
+    "  express_route_gateway_bypass = $($Obj.ExpressRouteGatewayBypass.ToString().ToLower())" + $NL +
+    "  dpd_timeout_seconds          = `"$($Obj.DpdTimeoutSeconds)`"" + $NL +
+    "  shared_key                   = `"$($Obj.SharedKey)`""
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_virtual_network_gateway_connection.gwcon_$($Obj.Name) $($Obj.Id)"
+}
+
+Function GetTFLocalGateway($Obj) {
+    $Global:TFResources += "resource `"azurerm_local_network_gateway`" `"lgw_$($Obj.Name)`" {" + $NL +
+    "  name                = `"$($Obj.Name)`"" + $NL +
+    "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+    "  location            = `"$($Obj.Location)`"" + $NL +
+    "  gateway_address     = `"$($Obj.GatewayIPAddress)`"" + $NL +
+    "  address_space       = [`"$($Obj.AddressPrefixes -join '`",`"')`"]"
+    
+    If ($Obj.BgpSettings.asn) {
+        $Global:TFResources += $NL + "  bgp_settings {" + $NL +
+            "    asn                 = `"$($Obj.BgpSettings.asn)`"" + $NL +
+            "    bgp_peering_address = `"$($Obj.BgpSettings.bgpPeeringAddress)`"" + $NL +
+            "    peer_weight         = `"$($Obj.BgpSettings.peerWeight)`""
+
+        $Global:TFResources += "  }"
+    }
+    
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_local_network_gateway.lgw_$($Obj.Name) $($Obj.Id)"
+}
+
+Function GetTFVirtualGateway($Obj) {
+    $Global:TFResources += "resource `"azurerm_virtual_network_gateway`" `"gw_$($Obj.Name)`" {" + $NL +
+    "  name                = `"$($Obj.Name)`"" + $NL +
+    "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+    "  location            = `"$($Obj.Location)`"" + $NL +
+    "  type                = `"$($Obj.Type)`"" + $NL +
+    "  vpn_type            = `"$($Obj.VpnType)`"" + $NL +
+    "  active_active       = $($Obj.ActiveActive.ToString().ToLower())" + $NL +
+    "  enable_bgp          = $($Obj.EnableBGP.ToString().ToLower())" + $NL +
+    "  generation          = `"$($Obj.VPNGatewayGeneration)`"" + $NL +
+    "  sku                 = `"$($Obj.Sku)`""             
+
+    $I = 1
+    ForEach ($IPConfig In $Obj.IPConfigs) {
+        $PIP = $AllPIPs.Values | Where-Object {$_.Id -eq $IPConfig.PublicIPId}
+        $Split = $IPConfig.SubnetId -split '/'
+        $SubnetName = "$($Split[$Split.Count - 3])_$($Split[$Split.Count - 1])"
+
+        If($I -ne $Obj.IPConfigs.Count) {
+            $Global:TFResources += $NL + "  ip_configuration {" + $NL +
+                "    name                          = `"$($IPConfig.Name)`"" + $NL +
+                "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id" + $NL +
+                "    private_ip_address_allocation = `"$($IPConfig.PrivateIPAllocationMethod)`"" + $NL +
+                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id"
+
+            $Global:TFResources += "  }" + $NL
+        } Else {
+            $Global:TFResources += $NL + "  ip_configuration {" + $NL +
+                "    name                          = `"$($IPConfig.Name)`"" + $NL +
+                "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id" + $NL +
+                "    private_ip_address_allocation = `"$($IPConfig.PrivateIPAllocationMethod)`"" + $NL +
+                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id"
+
+            $Global:TFResources += "  }"
+        }
+
+        $I++
+    }
+
+    If ($Obj.EnableBGP -eq "True") {
+        $Global:TFResources += $NL + "  bgp_settings {" + $NL +
+            "    asn             = `"$($Obj.BgpSettings.asn)`"" + $NL +
+            "    peering_address = `"$($Obj.BgpSettings.bgpPeeringAddress)`"" + $NL +
+            "    peer_weight     = `"$($Obj.BgpSettings.peerWeight)`""
+
+        $Global:TFResources += "  }"
+    }
+
+    If ($Obj.ClientConfiguration) {
+        $Global:TFResources += $NL + "  vpn_client_configuration {" + $NL +
+            "    address_space        = [`"$($Obj.ClientConfiguration.vpnClientAddressPool.addressPrefixes -join '`",`"')`"]" + $NL +
+            "    aad_tenant           = `"$($Obj.ClientConfiguration.aadTenant)`"" + $NL +
+            "    aad_audience         = `"$($Obj.ClientConfiguration.aadAudience)`"" + $NL +
+            "    aad_issuer           = `"$($Obj.ClientConfiguration.aadIssuer)`"" + $NL +
+            "    vpn_client_protocols = [`"$($Obj.ClientConfiguration.vpnClientProtocols -join '`",`"')`"]"
+
+        $Global:TFResources += "  }"
+    }
+    
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_virtual_network_gateway.gw_$($Obj.Name) $($Obj.Id)"  
+}
+
 Function GetTFVirtualNetwork($Obj) {
     $Global:TFResources += "resource `"azurerm_virtual_network`" `"vnet_$($Obj.Name)`" {" + $NL +
         "  name                = `"$($Obj.Name)`"" + $NL +
@@ -174,7 +322,7 @@ Function GetTFVirtualNetwork($Obj) {
         "  address_space       = [`"$($Obj.AddressSpaces.AddressSufixes -join '`",`"')`"]" + $NL +
         "  dns_servers         = [`"$($Obj.DnsServers -join '`",`"')`"]"
 
-    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -192,7 +340,9 @@ Function GetTFVirtualNetwork($Obj) {
 }
 
 Function GetTFSubnet($Obj) {
-    $Global:TFResources += "resource `"azurerm_subnet`" `"subnet_$($Obj.Name)`" {" + $NL +
+    $SubnetName = "$($Obj.VirtualNetworkName)_$($Obj.Name)"
+
+    $Global:TFResources += "resource `"azurerm_subnet`" `"subnet_$($SubnetName)`" {" + $NL +
         "  name                 = `"$($Obj.Name)`"" + $NL +
         "  resource_group_name  = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
         "  virtual_network_name = azurerm_virtual_network.vnet_$($Obj.VirtualNetworkName).name" + $NL +
@@ -204,7 +354,7 @@ Function GetTFSubnet($Obj) {
 
     $Global:TFResources += "}" + $NL
 
-    $Global:TFImport += "terraform import azurerm_subnet.subnet_$($Obj.Name) $($Obj.Id)"     
+    $Global:TFImport += "terraform import azurerm_subnet.subnet_$($SubnetName) $($Obj.Id)"     
 }
 
 Function GetTFPublicIP($Obj) {
@@ -221,7 +371,7 @@ Function GetTFPublicIP($Obj) {
         $Global:TFResources += "  domain_name_label       = `"$($Obj.DomainDNSLabel)`""
     }
     
-    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -249,7 +399,7 @@ Function GetTFAvailSet($Obj) {
         "  platform_fault_domain_count  = `"$($Obj.PlatformFaultDomainCount)`"" + $NL +
         "  platform_update_domain_count = `"$($Obj.PlatformUpdateDomainCount)`""
 
-    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -275,7 +425,7 @@ Function GetTFNetInterface($Obj) {
     $I = 1
     ForEach ($IPConfig In $Obj.IPConfigs) {
         $Split = $IPConfig.subnetId -split '/'
-        $SubnetName = $Split[$Split.Count - 1]
+        $SubnetName = "$($Split[$Split.Count - 3])_$($Split[$Split.Count - 1])"
         $PIP = $AllPIPs.Values | Where-Object {$_.Id -eq $IPConfig.PublicIPId}
 
         If($I -ne $Obj.IPConfigs.Count) {
@@ -305,7 +455,7 @@ Function GetTFNetInterface($Obj) {
         $I++
     }
     
-    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select -ExpandProperty Name
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
     If($TagNames) {
         $Global:TFResources += $NL + "  tags     = {"
@@ -424,6 +574,7 @@ ForEach ($Resource In $Resources) {
                 Sku                       = $Resource.sku.name
                 PlatformFaultDomainCount  = $Properties.platformFaultDomainCount
                 PlatformUpdateDomainCount = $Properties.platformUpdateDomainCount
+                Tags                      = $Resource.tags
             }
 
             If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
@@ -448,10 +599,104 @@ ForEach ($Resource In $Resources) {
                 SkuName                = $Resource.sku.name
                 SkuTier                = $Resource.sku.tier
                 DomainDNSLabel         = $Properties.dnsSettings.domainNameLabel
+                Tags                   = $Resource.tags
             }
 
             If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
             If (-Not $AllPIPs.Contains($Obj.Id)) { $AllPIPs.Add($Obj.Id, $Obj) }
+        }
+
+        'microsoft.network/connections' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                             = $Resource.Id
+                Name                           = $Resource.Name
+                Location                       = $Resource.location
+                Tags                           = $Resource.tags
+                ResourceGroup                  = [PSCustomObject]@{
+                    Id          	           = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name                       = $Resource.resourceGroup
+                }
+                Mode                           = $Properties.connectionMode
+                Protocol                       = $Properties.connectionProtocol
+                Type                           = $Properties.connectionType
+                DpdTimeoutSeconds              = $Properties.dpdTimeoutSeconds
+                EnableBgp                      = $Properties.enableBgp
+                ExpressRouteGatewayBypass      = $Properties.expressRouteGatewayBypass
+                IpsecPolicies                  = $Properties.ipsecPolicies
+                LocalNetworkGatewayId          = $Properties.localNetworkGateway2.Id
+                VirtualNetworkGatewayId        = $Properties.virtualNetworkGateway1.Id
+                RoutingWeight                  = $Properties.routingWeight
+                SharedKey                      = $Properties.sharedKey
+                TrafficSelectorPolicies        = $Properties.trafficSelectorPolicies
+                UseLocalAzureIpAddress         = $Properties.useLocalAzureIpAddress
+                UsePolicyBasedTrafficSelectors = $Properties.usePolicyBasedTrafficSelectors
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllGWConnections.Contains($Obj.Id)) { $AllGWConnections.Add($Obj.Id, $Obj) }
+        }
+
+        'microsoft.network/localnetworkgateways' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                     = $Resource.Id
+                Name                   = $Resource.Name
+                Location               = $Resource.location
+                Tags                   = $Resource.tags
+                ResourceGroup          = [PSCustomObject]@{
+                    Id          	   = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name               = $Resource.resourceGroup
+                }
+                BgpSettings            = $Properties.bgpSettings
+                GatewayIPAddress       = $Properties.gatewayIpAddress
+                AddressPrefixes        = $Properties.localNetworkAddressSpace.addressPrefixes
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllLocalGWs.Contains($Obj.Id)) { $AllLocalGWs.Add($Obj.Id, $Obj) }
+        }
+
+        'microsoft.network/virtualnetworkgateways' {
+            $Properties = $Resource.Properties
+            $IPConfigs = $Properties.ipConfigurations
+
+            $Obj = [PSCustomObject]@{
+                Id                     = $Resource.Id
+                Name                   = $Resource.Name
+                Location               = $Resource.location
+                Tags                   = $Resource.tags
+                ResourceGroup          = [PSCustomObject]@{
+                    Id          	   = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name               = $Resource.resourceGroup
+                }
+                Type                   = $Properties.gatewayType
+                VpnType                = $Properties.vpnType
+                ActiveActive           = $Properties.activeActive
+                EnableBGP              = $Properties.enableBgp
+                Sku                    = $Properties.sku.name
+                VPNGatewayGeneration   = $Properties.vpnGatewayGeneration
+                BgpSettings            = $Properties.bgpSettings
+                ClientConfiguration    = $Properties.vpnClientConfiguration
+                VnetPeeringsIDs        = $Properties.remoteVirtualNetworkPeerings.id
+                IPConfigs              = @()
+            }
+
+            ForEach ($IPConfig In $IPConfigs) {
+                $IPProperties = $IPConfig.Properties
+
+                $Obj.IPConfigs += [PSCustomObject]@{
+                    Name                      = $IPConfig.Name
+                    PrivateIPAllocationMethod = $IPProperties.privateIPAllocationMethod
+                    PublicIPId                = $IPProperties.publicIPAddress.id
+                    SubnetId                  = $IPProperties.subnet.id
+                }
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllGWs.Contains($Obj.Id)) { $AllGWs.Add($Obj.Id, $Obj) }
         }
 
         'microsoft.storage/storageaccounts' {
@@ -503,6 +748,21 @@ ForEach ($Resource In $Resources) {
                     AddressSufixes = $AddressSpace.addressPrefixes
                 }
             }
+
+            ForEach ($Peering In $Peerings) {
+                $Obj.Peerings += [PSCustomObject]@{
+                    Id                        = $Peering.id
+                    Name                      = $Peering.name
+                    AllowForwardedTraffic     = $Peering.properties.allowForwardedTraffic
+                    AllowGatewayTransit       = $Peering.properties.allowGatewayTransit
+                    AllowVirtualNetworkAccess = $Peering.properties.allowVirtualNetworkAccess
+                    DoNotVerifyRemoteGateways = $Peering.properties.doNotVerifyRemoteGateways
+                    RemoteAddressPrefixes     = $Peering.properties.remoteAddressSpace.addressPrefixes
+                    RemoteVirtualNetworkIds   = $Peering.properties.remoteVirtualNetwork.id
+                    RouteServiceVips          = $Peering.properties.routeServiceVips
+                    UseRemoteGateways         = $Peering.properties.useRemoteGateways
+                }
+            }           
 
             ForEach ($Subnet In $Subnets) {
                 $SubnetProperties = $Subnet.Properties
@@ -588,6 +848,7 @@ ForEach ($Resource In $Resources) {
                 BootDiagnostics   = $DiagProfile.bootDiagnostics.storageUri
                 AvailabilitySetId = $Properties.availabilitySet.Id
                 OsDiskInfo        = $OSDiskInfo
+                Tags              = $Resource.tags
             }
 
             ForEach ($Nic In $Nics) {
@@ -627,19 +888,20 @@ ForEach ($Resource In $Resources) {
         'microsoft.compute/disks' {
             If (-Not $Resource.properties.osType) {
                 $Obj = [PSCustomObject]@{
-                    Id            = $Resource.Id
-                    Name          = $Resource.Name
-                    Location      = $Resource.location
-                    ResourceGroup = [PSCustomObject]@{
-                        Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                        Name      = $Resource.resourceGroup
+                    Id                 = $Resource.Id
+                    Name               = $Resource.Name
+                    Location           = $Resource.location
+                    ResourceGroup      = [PSCustomObject]@{
+                        Id             = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                        Name           = $Resource.resourceGroup
                     }
                     VMId               = $Resource.managedBy
                     SizeGB             = $Resource.properties.diskSizeGB
                     State              = $Resource.properties.diskState
                     OsType             = $Resource.properties.osType
                     StorageAccountType = $Resource.sku.name
-                    CreateOption       = $Resource.properties.creationData.createOption                            
+                    CreateOption       = $Resource.properties.creationData.createOption
+                    Tags               = $Resource.tags                           
                 }          
 
                 If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
@@ -658,16 +920,19 @@ Write-Host "[$(Get-Date)] Generating terraform files..."
 $null = New-Item -Name $TFDirectory -Path (Get-Location).Path -Type Directory -Force
 $null = New-Item -Name $TFMainFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value (GetTFAzProvider) -Force
 
-$AllRGs.Values | ForEach-Object { GetTFResourceGroup($_) }
-$AllSTGs.Values | ForEach-Object { GetTFStorageAccount($_) }
-$AllAVSets.Values | ForEach-Object { GetTFAvailSet($_) }
-$AllVNets.Values | ForEach-Object { GetTFVirtualNetwork($_) }
+$AllRGs.Values           | ForEach-Object { GetTFResourceGroup($_) }
+$AllSTGs.Values          | ForEach-Object { GetTFStorageAccount($_) }
+$AllAVSets.Values        | ForEach-Object { GetTFAvailSet($_) }
+$AllGWConnections.Values | ForEach-Object { GetTFGatewayConnection($_) }
+$AllLocalGWs.Values      | ForEach-Object { GetTFLocalGateway($_) }
+$AllGWs.Values           | ForEach-Object { GetTFVirtualGateway($_) }
+$AllVNets.Values         | ForEach-Object { GetTFVirtualNetwork($_) }
 $AllVNets.Values.Subnets | ForEach-Object { GetTFSubnet($_) }
-$AllPIPs.Values | ForEach-Object { GetTFPublicIP($_) }
-$AllNICs.Values | ForEach-Object { GetTFNetInterface($_) }
-$AllDisks.Values | ForEach-Object { GetTFManagedDisk($_) }
-$AllVMs.Values | ForEach-Object { GetTFWindowsVM($_) }
-$AllDisks.Values | Where-Object {$_.VMId} | ForEach-Object { GetTFDataDiskAttachment($_) }
+$AllPIPs.Values          | ForEach-Object { GetTFPublicIP($_) }
+$AllNICs.Values          | ForEach-Object { GetTFNetInterface($_) }
+$AllDisks.Values         | ForEach-Object { GetTFManagedDisk($_) }
+$AllVMs.Values           | ForEach-Object { GetTFWindowsVM($_) }
+$AllDisks.Values         | Where-Object {$_.VMId} | ForEach-Object { GetTFDataDiskAttachment($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 

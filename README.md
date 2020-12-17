@@ -9,6 +9,9 @@ Usage: .\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"
 
 Supported Azure resources (under development...):
 
+*Some attributes/resources properties might not have been implemented yet.
+If you need additional resources attributes, feel free to contribute.
+
 ```
 resourcegroups
 microsoft.storage/storageaccounts
@@ -16,6 +19,9 @@ microsoft.network/publicipaddresses
 microsoft.network/virtualnetworks
 microsoft.network/virtualnetworks/subnets
 microsoft.network/networkinterfaces
+microsoft.network/connections
+microsoft.network/localnetworkgateways
+microsoft.network/virtualnetworkgateways
 microsoft.compute/availabilitysets
 microsoft.compute/virtualmachines (Windows so far)
 microsoft.compute/disks
