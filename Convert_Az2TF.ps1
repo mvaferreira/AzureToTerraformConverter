@@ -13,7 +13,7 @@ Disclaimer
     
     .SYNOPSIS
         Author: Marcus Ferreira marcus.ferreira[at]microsoft[dot]com
-        Version: 0.2
+        Version: 0.3
 
     .DESCRIPTION
         This script will read Azure resources via "Azure CLI" and convert resources to Terraform files.
@@ -29,9 +29,13 @@ Disclaimer
         microsoft.network/virtualnetworks
         microsoft.network/virtualnetworks/subnets
         microsoft.network/networkinterfaces
+        microsoft.network/connections
+        microsoft.network/localnetworkgateways
+        microsoft.network/virtualnetworkgateways
         microsoft.compute/availabilitysets
         microsoft.compute/virtualmachines (Windows so far)
         microsoft.compute/disks
+        microsoft.keyvault/vaults
     
     .EXAMPLE
         Run script with -SubscriptionID parameter.
@@ -94,6 +98,7 @@ $AllAVSets = @{ }
 $AllGWs = @{ }
 $AllLocalGWs = @{ }
 $AllGWConnections = @{ }
+$AllKeyVaults = @{ }
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
@@ -103,7 +108,6 @@ $Global:TFImport += "terraform validate"
 
 Function GetTFAzProvider() {
     $TF_AzProvider = "provider `"azurerm`" {" + $NL +
-    "  version = `"~> 2.21`"" + $NL +
     "  features {}" + $NL +
     "}" + $NL
     
@@ -319,8 +323,11 @@ Function GetTFVirtualNetwork($Obj) {
         "  name                = `"$($Obj.Name)`"" + $NL +
         "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
         "  location            = `"$($Obj.Location)`"" + $NL +
-        "  address_space       = [`"$($Obj.AddressSpaces.AddressSufixes -join '`",`"')`"]" + $NL +
-        "  dns_servers         = [`"$($Obj.DnsServers -join '`",`"')`"]"
+        "  address_space       = [`"$($Obj.AddressSpaces.AddressSufixes -join '`",`"')`"]"
+
+    If ($Obj.DnsServers) {
+        $Global:TFResources += "  dns_servers         = [`"$($Obj.DnsServers -join '`",`"')`"]"
+    }
 
     $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
@@ -420,39 +427,27 @@ Function GetTFNetInterface($Obj) {
     $Global:TFResources += "resource `"azurerm_network_interface`" `"nic_$($Obj.Name)`" {" + $NL +
         "  name                = `"$($Obj.Name)`"" + $NL +
         "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
-        "  location            = `"$($Obj.Location)`"" + $NL
+        "  location            = `"$($Obj.Location)`""
 
-    $I = 1
+    If ($Obj.AcceleratedNetworking) {
+        $Global:TFResources += "  enable_accelerated_networking = $($Obj.AcceleratedNetworking.ToString().ToLower())"
+    }
+
     ForEach ($IPConfig In $Obj.IPConfigs) {
         $Split = $IPConfig.subnetId -split '/'
         $SubnetName = "$($Split[$Split.Count - 3])_$($Split[$Split.Count - 1])"
         $PIP = $AllPIPs.Values | Where-Object {$_.Id -eq $IPConfig.PublicIPId}
 
-        If($I -ne $Obj.IPConfigs.Count) {
-            $Global:TFResources += "  ip_configuration {" + $NL +
-                "    name                          = `"$($IPConfig.Name)`"" + $NL +
-                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
-                "    private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`""
-        
-                If($PIP) {
-                    $Global:TFResources += "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id"
-                }
+        $Global:TFResources += $NL + "  ip_configuration {" + $NL +
+            "    name                          = `"$($IPConfig.Name)`"" + $NL +
+            "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
+            "    private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`""
+    
+            If($PIP) {
+                $Global:TFResources += "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id"
+            }
 
-                $Global:TFResources += "  }" + $NL
-        } Else {
-            $Global:TFResources += "  ip_configuration {" + $NL +
-                "    name                          = `"$($IPConfig.Name)`"" + $NL +
-                "    subnet_id                     = azurerm_subnet.subnet_$($SubnetName).id" + $NL +
-                "    private_ip_address_allocation = `"$($IPConfig.privateIPAllocationMethod)`""
-
-                If($PIP) {
-                    $Global:TFResources += "    public_ip_address_id          = azurerm_public_ip.pip_$($PIP.Name).id"
-                }
-
-                $Global:TFResources += "  }"
-        }
-
-        $I++
+            $Global:TFResources += "  }"
     }
     
     $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
@@ -481,6 +476,18 @@ Function GetTFManagedDisk($Obj) {
         "  create_option        = `"$($Obj.CreateOption)`"" + $NL +
         "  disk_size_gb         = `"$($Obj.SizeGB)`""
 
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
     $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_managed_disk.disk_$($Obj.Name) $($Obj.Id)"
@@ -488,13 +495,14 @@ Function GetTFManagedDisk($Obj) {
 
 Function GetTFDataDiskAttachment($Obj) {
     $VM = $Resources | Where-Object {$_.id -eq $Obj.VMId}
-    $VMDataDisks = $VM.properties.storageprofile.dataDisks
+    $DataDisks = $VM.properties.storageprofile.datadisks
+    $VMDataDisk = $DataDisks | Where-Object {$_.managedDisk.id -eq $Obj.Id}
 
     $Global:TFResources += "resource `"azurerm_virtual_machine_data_disk_attachment`" `"disk_att_$($Obj.Name)`" {" + $NL +
         "  managed_disk_id    = azurerm_managed_disk.disk_$($Obj.Name).id" + $NL +
         "  virtual_machine_id = azurerm_windows_virtual_machine.vm_$($VM.name).id" + $NL +
-        "  lun                = $($VMDataDisks.lun)" + $NL +
-        "  caching            = `"$($VMDataDisks.caching)`"" + $NL +
+        "  lun                = $($VMDataDisk.lun)" + $NL +
+        "  caching            = `"$($VMDataDisk.caching)`"" + $NL +
         "}" + $NL
 
     $DiskAttId = "$($VM.Id)/dataDisks/$($Obj.Name)"
@@ -514,25 +522,33 @@ Function GetTFWindowsVM($Obj) {
         "  admin_password        = `"$($Obj.Name)`"" + $NL +
         "  license_type          = `"$($Obj.LicenseType)`""
 
+    If ($Obj.Priority -eq "Spot") {
+        $Global:TFResources += "  priority = `"$($Obj.Priority)`"" + $NL +
+            "  eviction_policy = `"$($Obj.EvictionPolicy)`""
+    }
+    
     If ($AvSet) {
         $Global:TFResources += "  availability_set_id   = azurerm_availability_set.avset_$($AvSet.Name).id"
     }
 
-    If ($Obj.BootDiagnostics) {
-        $Global:TFResources += $NL + "  boot_diagnostics {" + $NL +
-        "    storage_account_uri = `"$($Obj.BootDiagnostics)`"" + $NL +
-        "  }"
+    If ($Obj.BootDiagnostics.enabled) {
+        $Global:TFResources += $NL + "  boot_diagnostics {"
+
+        If ($Obj.BootDiagnostics.storageUri) {
+            $Global:TFResources += "    storage_account_uri = `"$($Obj.BootDiagnostics.storageUri)`""
+        }
+
+        $Global:TFResources += "  }"
     }
-        
-    $Global:TFResources += $NL +"  network_interface_ids = ["
-    
+
+    $NicNames = @()
+
     ForEach ($Nic In $Nics) {
-        $Split = $Nic.NicId -split '/'
-        $NicName = $Split[$Split.count - 1]
-        $Global:TFResources += "    azurerm_network_interface.nic_$($NicName).id" -join ','
+        $NicObj = $AllNICs.Values | Where-Object {$_.id -eq $Nic.NicId}
+        $NicNames += "azurerm_network_interface.nic_$($NicObj.Name).id"
     }
-    
-    $Global:TFResources += "  ]" + $NL
+
+    $Global:TFResources += $NL + "  network_interface_ids = [$($NicNames -join ',')]" + $NL
 
     $OSDisk = $Obj.Disks | Where-Object {$_.OsType}
     $OsDiskInfo = $Obj.OsDiskInfo
@@ -551,15 +567,106 @@ Function GetTFWindowsVM($Obj) {
         "    version   = `"$($Obj.Version)`"" + $NL +
         "  }"
 
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
     $Global:TFResources += "}" + $NL
 
     $Global:TFImport += "terraform import azurerm_windows_virtual_machine.vm_$($Obj.Name) $($Obj.Id)"
+}
+
+Function GetTFKeyVault($Obj) {
+    $Global:TFResources += "data `"azurerm_client_config`" `"current`" {}"
+
+    $Global:TFResources += $NL + "resource `"azurerm_key_vault`" `"kvault_$($Obj.Name)`" {" + $NL +
+        "  name                            = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name             = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location                        = `"$($Obj.Location)`"" + $NL +
+        "  enabled_for_disk_encryption     = $($Obj.EnabledForDiskEncryption.ToString().ToLower())" + $NL +
+        "  enabled_for_deployment          = $($Obj.EnabledForDeployment.ToString().ToLower())" + $NL +
+        "  enabled_for_template_deployment = $($Obj.EnabledForTemplateDeployment.ToString().ToLower())" + $NL +
+        "  tenant_id                       = data.azurerm_client_config.current.tenant_id" + $NL +
+        "  sku_name                        = `"$($Obj.SkuName.ToString().ToLower())`""
+
+    If ($Obj.SoftDeleteRetentionInDays) {
+        $Global:TFResources += "  soft_delete_enabled         = true" + $NL +
+            "  soft_delete_retention_days  = `"$($Obj.SoftDeleteRetentionInDays)`""
+    }
+
+    $Global:TFResources += $NL + "  access_policy {" + $NL +
+    "   tenant_id = data.azurerm_client_config.current.tenant_id" + $NL +
+    "   object_id = data.azurerm_client_config.current.object_id" + $NL + $NL +
+    "   key_permissions = [" + $NL +
+    "    `"$($Obj.KeysPermissions -join '`",`"')`"" + $NL +
+    "   ]" + $NL + $NL +
+    "   secret_permissions = [" + $NL +
+    "    `"$($Obj.SecretsPermissions -join '`",`"')`"" + $NL +    
+    "   ]" + $NL + $NL +
+    "   certificate_permissions = [" + $NL +
+    "    `"$($Obj.CertificatesPermissions -join '`",`"')`"" + $NL +    
+    "   ]" + $NL +
+    "  }"
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_key_vault.kvault_$($Obj.Name) $($Obj.Id)"
 }
 
 ForEach ($Resource In $Resources) {
     $Type = $Resource.Type
 
     Switch ($Type) {
+        'microsoft.keyvault/vaults' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                           = $Resource.Id
+                Name                         = $Resource.Name
+                Location                     = $Resource.location
+                ResourceGroup                = [PSCustomObject]@{
+                    Id          	         = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name                     = $Resource.resourceGroup
+                }
+                EnableRbacAuthorization      = $Properties.enableRbacAuthorization
+                EnableSoftDelete             = $Properties.enableSoftDelete
+                EnabledForDeployment         = $Properties.enabledForDeployment
+                EnabledForDiskEncryption     = $Properties.enabledForDiskEncryption
+                EnabledForTemplateDeployment = $Properties.enabledForTemplateDeployment
+                SkuName                      = $Properties.sku.name
+                SkuFamily                    = $Properties.sku.family
+                SoftDeleteRetentionInDays    = $Properties.softDeleteRetentionInDays
+                VaultUri                     = $Properties.vaultUri
+                CertificatesPermissions      = $Properties.accessPolicies.permissions.certificates
+                KeysPermissions              = $Properties.accessPolicies.permissions.keys
+                SecretsPermissions           = $Properties.accessPolicies.permissions.secrets
+                Tags                         = $Resource.tags
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllKeyVaults.Contains($Obj.Id)) { $AllKeyVaults.Add($Obj.Id, $Obj) }
+        }
+
         'microsoft.compute/availabilitysets' {
             $Properties = $Resource.Properties
 
@@ -789,15 +896,16 @@ ForEach ($Resource In $Resources) {
             $IPConfigs = $Properties.ipConfigurations
 
             $Obj = [PSCustomObject]@{
-                Id            = $Resource.Id
-                Name          = $Resource.Name
-                Location      = $Resource.location
-                ResourceGroup = [PSCustomObject]@{
-                    Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
-                    Name      = $Resource.resourceGroup
+                Id                    = $Resource.Id
+                Name                  = $Resource.Name
+                Location              = $Resource.location
+                ResourceGroup         = [PSCustomObject]@{
+                    Id                = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name              = $Resource.resourceGroup
                 }
-                Tags          = $Resource.tags
-                IPConfigs     = @()
+                Tags                  = $Resource.tags
+                AcceleratedNetworking = $Properties.enableAcceleratedNetworking
+                IPConfigs             = @()
             }
 
             ForEach ($IPConfig In $IPConfigs) {
@@ -845,10 +953,12 @@ ForEach ($Resource In $Resources) {
                 Sku               = $ImageReference.sku
                 Version           = $ImageReference.version
                 LicenseType       = $Properties.licenseType
-                BootDiagnostics   = $DiagProfile.bootDiagnostics.storageUri
+                BootDiagnostics   = $DiagProfile.bootDiagnostics
                 AvailabilitySetId = $Properties.availabilitySet.Id
                 OsDiskInfo        = $OSDiskInfo
                 Tags              = $Resource.tags
+                Priority          = $Properties.priority
+                EvictionPolicy    = $Properties.evictionPolicy
             }
 
             ForEach ($Nic In $Nics) {
@@ -902,7 +1012,7 @@ ForEach ($Resource In $Resources) {
                     StorageAccountType = $Resource.sku.name
                     CreateOption       = $Resource.properties.creationData.createOption
                     Tags               = $Resource.tags                           
-                }          
+                }         
 
                 If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
                 If (-Not $AllDisks.Contains($Obj.Id)) { $AllDisks.Add($Obj.Id, $Obj) }
@@ -932,7 +1042,8 @@ $AllPIPs.Values          | ForEach-Object { GetTFPublicIP($_) }
 $AllNICs.Values          | ForEach-Object { GetTFNetInterface($_) }
 $AllDisks.Values         | ForEach-Object { GetTFManagedDisk($_) }
 $AllVMs.Values           | ForEach-Object { GetTFWindowsVM($_) }
-$AllDisks.Values         | Where-Object {$_.VMId} | ForEach-Object { GetTFDataDiskAttachment($_) }
+$AllKeyVaults.Values     | ForEach-Object { GetTFKeyVault($_) }
+$AllDisks.Values         | Where-Object {$_.VMId} | Sort-Object properties.storageprofile.datadisks.lun | ForEach-Object { GetTFDataDiskAttachment($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 

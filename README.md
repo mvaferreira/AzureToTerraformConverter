@@ -25,6 +25,7 @@ microsoft.network/virtualnetworkgateways
 microsoft.compute/availabilitysets
 microsoft.compute/virtualmachines (Windows so far)
 microsoft.compute/disks
+microsoft.keyvault/vaults
 ```
 
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**
