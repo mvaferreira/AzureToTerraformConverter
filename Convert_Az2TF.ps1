@@ -18,8 +18,9 @@ Disclaimer
     .DESCRIPTION
         This script will read Azure resources via "Azure CLI" and convert resources to Terraform files.
         
-        Required: az cli and az graph
-                  install az graph with: # az extension add --name resource-graph
+        Required: az cli, az cli graph extension and Terraform binary.
+
+                  install az cli graph with: # az extension add --name resource-graph
 
         Supported Azure resources:
 
