@@ -16,6 +16,7 @@ If you need additional resources attributes, feel free to contribute.
 resourcegroups
 microsoft.storage/storageaccounts
 microsoft.network/publicipaddresses
+microsoft.network/networksecuritygroups
 microsoft.network/virtualnetworks
 microsoft.network/virtualnetworks/subnets
 microsoft.network/networkinterfaces
@@ -26,6 +27,7 @@ microsoft.compute/availabilitysets
 microsoft.compute/virtualmachines (Windows so far)
 microsoft.compute/disks
 microsoft.keyvault/vaults
+microsoft.operationalinsights/workspaces
 ```
 
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**

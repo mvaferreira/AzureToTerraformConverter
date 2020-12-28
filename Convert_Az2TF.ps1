@@ -13,7 +13,7 @@ Disclaimer
     
     .SYNOPSIS
         Author: Marcus Ferreira marcus.ferreira[at]microsoft[dot]com
-        Version: 0.3
+        Version: 0.4
 
     .DESCRIPTION
         This script will read Azure resources via "Azure CLI" and convert resources to Terraform files.
@@ -27,6 +27,7 @@ Disclaimer
         resourcegroups
         microsoft.storage/storageaccounts
         microsoft.network/publicipaddresses
+        microsoft.network/networksecuritygroups
         microsoft.network/virtualnetworks
         microsoft.network/virtualnetworks/subnets
         microsoft.network/networkinterfaces
@@ -45,6 +46,7 @@ Disclaimer
 
         Before importing the resources into Terraform state, set the subscription ID as default.
 
+        # az account list -o table
         # az account set --subscription "<my_subscription_ID>"
 #>
 
@@ -100,6 +102,8 @@ $AllGWs = @{ }
 $AllLocalGWs = @{ }
 $AllGWConnections = @{ }
 $AllKeyVaults = @{ }
+$AllLogWks = @{ }
+$AllNSGs = @{ }
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
@@ -424,6 +428,74 @@ Function GetTFAvailSet($Obj) {
     $Global:TFImport += "terraform import azurerm_availability_set.avset_$($Obj.Name) $($Obj.Id)" 
 }
 
+Function GetTFNetSecurityGroup($Obj) {
+    $Global:TFResources += "resource `"azurerm_network_security_group`" `"nsg_$($Obj.Name)`" {" + $NL +
+        "  name                = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location            = `"$($Obj.Location)`""
+
+    ForEach($SecurityRule In $Obj.SecurityRules) {
+        $RuleProperties = $SecurityRule.properties
+
+        $Global:TFResources += $NL + "  security_rule {" + $NL +
+        "   name                       = `"$($SecurityRule.name)`"" + $NL +
+        "   priority                   = `"$($RuleProperties.priority)`"" + $NL +
+        "   direction                  = `"$($RuleProperties.direction)`"" + $NL +
+        "   access                     = `"$($RuleProperties.access)`"" + $NL +
+        "   protocol                   = `"$($RuleProperties.protocol)`"" + $NL +
+        "   source_port_range          = `"$($RuleProperties.sourcePortRange)`"" + $NL +
+        "   destination_port_range     = `"$($RuleProperties.destinationPortRange)`"" + $NL +
+        "   source_address_prefix      = `"$($RuleProperties.sourceAddressPrefix)`"" + $NL +
+        "   destination_address_prefix = `"$($RuleProperties.destinationAddressPrefix)`""
+
+        If ($RuleProperties.description) {
+            $Global:TFResources += "   description                = `"$($RuleProperties.description)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_network_security_group.nsg_$($Obj.Name) $($Obj.Id)"
+
+    If ($Obj.NicAssociation) {
+        ForEach($NicAssociation In $Obj.NicAssociation) {
+            $Global:TFResources += "resource `"azurerm_network_interface_security_group_association`" `"nic_nsg_$($NicAssociation.NicName)_$($NicAssociation.NSGName)`" {" + $NL +
+            "  network_interface_id      = azurerm_network_interface.nic_$($NicAssociation.NicName).id" + $NL +
+            "  network_security_group_id = azurerm_network_security_group.nsg_$($NicAssociation.NSGName).id"
+
+            $Global:TFResources += "}" + $NL
+
+            $Global:TFImport += "terraform import azurerm_network_interface_security_group_association.nic_nsg_$($NicAssociation.NicName)_$($NicAssociation.NSGName) `"$($NicAssociation.NicId)|$($NicAssociation.NSGId)`""
+        }
+    }
+
+    If ($Obj.SubnetAssociation) {
+        ForEach($SubnetAssociation In $Obj.SubnetAssociation) {
+            $Global:TFResources += "resource `"azurerm_subnet_network_security_group_association`" `"subnet_nsg_$($SubnetAssociation.SubnetName)_$($SubnetAssociation.NSGName)`" {" + $NL +
+            "  subnet_id                 = azurerm_subnet.subnet_$($SubnetAssociation.SubnetName).id" + $NL +
+            "  network_security_group_id = azurerm_network_security_group.nsg_$($SubnetAssociation.NSGName).id"
+
+            $Global:TFResources += "}" + $NL
+
+            $Global:TFImport += "terraform import azurerm_subnet_network_security_group_association.subnet_nsg_$($SubnetAssociation.SubnetName)_$($SubnetAssociation.NSGName) $($SubnetAssociation.SubnetId)"
+        }
+    }    
+}
+
 Function GetTFNetInterface($Obj) {
     $Global:TFResources += "resource `"azurerm_network_interface`" `"nic_$($Obj.Name)`" {" + $NL +
         "  name                = `"$($Obj.Name)`"" + $NL +
@@ -586,16 +658,14 @@ Function GetTFWindowsVM($Obj) {
 }
 
 Function GetTFKeyVault($Obj) {
-    $Global:TFResources += "data `"azurerm_client_config`" `"current`" {}"
-
-    $Global:TFResources += $NL + "resource `"azurerm_key_vault`" `"kvault_$($Obj.Name)`" {" + $NL +
+    $Global:TFResources += "resource `"azurerm_key_vault`" `"kvault_$($Obj.Name)`" {" + $NL +
         "  name                            = `"$($Obj.Name)`"" + $NL +
         "  resource_group_name             = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
         "  location                        = `"$($Obj.Location)`"" + $NL +
         "  enabled_for_disk_encryption     = $($Obj.EnabledForDiskEncryption.ToString().ToLower())" + $NL +
         "  enabled_for_deployment          = $($Obj.EnabledForDeployment.ToString().ToLower())" + $NL +
         "  enabled_for_template_deployment = $($Obj.EnabledForTemplateDeployment.ToString().ToLower())" + $NL +
-        "  tenant_id                       = data.azurerm_client_config.current.tenant_id" + $NL +
+        "  tenant_id                       = `"$($Obj.TenantID)`"" + $NL +
         "  sku_name                        = `"$($Obj.SkuName.ToString().ToLower())`""
 
     If ($Obj.SoftDeleteRetentionInDays) {
@@ -603,19 +673,21 @@ Function GetTFKeyVault($Obj) {
             "  soft_delete_retention_days  = `"$($Obj.SoftDeleteRetentionInDays)`""
     }
 
-    $Global:TFResources += $NL + "  access_policy {" + $NL +
-    "   tenant_id = data.azurerm_client_config.current.tenant_id" + $NL +
-    "   object_id = data.azurerm_client_config.current.object_id" + $NL + $NL +
-    "   key_permissions = [" + $NL +
-    "    `"$($Obj.KeysPermissions -join '`",`"')`"" + $NL +
-    "   ]" + $NL + $NL +
-    "   secret_permissions = [" + $NL +
-    "    `"$($Obj.SecretsPermissions -join '`",`"')`"" + $NL +    
-    "   ]" + $NL + $NL +
-    "   certificate_permissions = [" + $NL +
-    "    `"$($Obj.CertificatesPermissions -join '`",`"')`"" + $NL +    
-    "   ]" + $NL +
-    "  }"
+    ForEach($AccessPolicy In $Obj.AccessPolicies) {
+        $Global:TFResources += $NL + "  access_policy {" + $NL +
+        "   tenant_id = `"$($AccessPolicy.tenantId)`"" + $NL +
+        "   object_id = `"$($AccessPolicy.objectId)`"" + $NL + $NL +
+        "   key_permissions = [" + $NL +
+        "    `"$($AccessPolicy.permissions.keys -join '`",`"')`"" + $NL +
+        "   ]" + $NL + $NL +
+        "   secret_permissions = [" + $NL +
+        "    `"$($AccessPolicy.permissions.secrets -join '`",`"')`"" + $NL +    
+        "   ]" + $NL + $NL +     
+        "   certificate_permissions = [" + $NL +
+        "    `"$($AccessPolicy.permissions.certificates -join '`",`"')`"" + $NL +    
+        "   ]" + $NL +
+        "  }"
+    }
 
     $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
 
@@ -634,10 +706,70 @@ Function GetTFKeyVault($Obj) {
     $Global:TFImport += "terraform import azurerm_key_vault.kvault_$($Obj.Name) $($Obj.Id)"
 }
 
+Function GetTFLogWorkspace($Obj) {
+    If ($Obj.PublicNetworkAccessForIngestion.ToString() -eq "Enabled") { $InternetIngestionEnabled = $True } Else { $InternetIngestionEnabled = $False }
+    If ($Obj.PublicNetworkAccessForQuery.ToString() -eq "Enabled") { $InternetQueryEnabled = $True } Else { $InternetQueryEnabled = $False }
+
+    $Global:TFResources += "resource `"azurerm_log_analytics_workspace`" `"lwks_$($Obj.Name)`" {" + $NL +
+        "  name                       = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name        = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location                   = `"$($Obj.Location)`"" + $NL +
+        "  sku                        = `"$($Obj.SkuName)`"" + $NL +
+        "  retention_in_days          = `"$($Obj.RetentionInDays)`"" + $NL +
+        "  internet_ingestion_enabled = $($InternetIngestionEnabled.ToString().ToLower())" + $NL +
+        "  internet_query_enabled     = $($InternetQueryEnabled.ToString().ToLower())"
+
+    If($Obj.WorkspaceCapping.dailyQuotaGb -gt 0){
+        $Global:TFResources += "  daily_quota_gb             = `"$($Obj.WorkspaceCapping.dailyQuotaGb)`""
+    }
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_log_analytics_workspace.lwks_$($Obj.Name) $($Obj.Id)"    
+}
+
+#Main loop
 ForEach ($Resource In $Resources) {
     $Type = $Resource.Type
 
     Switch ($Type) {
+        'microsoft.operationalinsights/workspaces' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                              = $Resource.Id
+                Name                            = $Resource.Name
+                Location                        = $Resource.location
+                ResourceGroup                   = [PSCustomObject]@{
+                    Id          	            = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name                        = $Resource.resourceGroup
+                }
+                SkuName                         = $Properties.sku.name
+                RetentionInDays                 = $Properties.retentionInDays
+                PublicNetworkAccessForIngestion = $Properties.publicNetworkAccessForIngestion
+                PublicNetworkAccessForQuery     = $Properties.publicNetworkAccessForQuery
+                CustomerId                      = $Properties.customerId
+                Features                        = $Properties.features
+                Source                          = $Properties.source
+                WorkspaceCapping                = $Properties.workspaceCapping
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllLogWks.Contains($Obj.Id)) { $AllLogWks.Add($Obj.Id, $Obj) }
+        }
+
         'microsoft.keyvault/vaults' {
             $Properties = $Resource.Properties
 
@@ -658,10 +790,9 @@ ForEach ($Resource In $Resources) {
                 SkuFamily                    = $Properties.sku.family
                 SoftDeleteRetentionInDays    = $Properties.softDeleteRetentionInDays
                 VaultUri                     = $Properties.vaultUri
-                CertificatesPermissions      = $Properties.accessPolicies.permissions.certificates
-                KeysPermissions              = $Properties.accessPolicies.permissions.keys
-                SecretsPermissions           = $Properties.accessPolicies.permissions.secrets
-                Tags                         = $Resource.tags
+                TenantID                     = $Resource.tenantId
+                AccessPolicies               = $Properties.accessPolicies
+                Tags                         = $Resource.tags               
             }
 
             If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
@@ -927,6 +1058,51 @@ ForEach ($Resource In $Resources) {
             If (-Not $AllNICs.Contains($Obj.Id)) { $AllNICs.Add($Obj.Id, $Obj) }            
         }
 
+        'microsoft.network/networksecuritygroups' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id                   = $Resource.Id
+                Name                 = $Resource.Name
+                Location             = $Resource.location
+                ResourceGroup        = [PSCustomObject]@{
+                    Id          	 = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name             = $Resource.resourceGroup
+                }
+                DefaultSecurityRules = $Properties.defaultSecurityRules
+                SecurityRules        = $Properties.securityRules
+                NicAssociation       = @()
+                SubnetAssociation    = @()
+            }
+
+            ForEach($Nic In $Properties.networkInterfaces) {
+                $Split = $Nic.id -split '/'
+                $NicName = $($Split[$Split.Count - 1])
+
+                $Obj.NicAssociation += [PSCustomObject]@{
+                    NicId   = $Nic.id
+                    NSGId   = $Resource.id
+                    NicName = $NicName
+                    NSGName = $Resource.Name
+                }
+            }
+
+            ForEach($Subnet In $Properties.subnets) {
+                $Split = $Subnet.id -split '/'
+                $SubnetName = "$($Split[$Split.Count - 3])_$($Split[$Split.Count - 1])"
+
+                $Obj.SubnetAssociation += [PSCustomObject]@{
+                    SubnetId   = $Subnet.id
+                    NSGId      = $Resource.id
+                    SubnetName = $SubnetName
+                    NSGName    = $Resource.Name
+                }
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllNSGs.Contains($Obj.Id)) { $AllNSGs.Add($Obj.Id, $Obj) }
+        } 
+
         'microsoft.compute/virtualmachines' {
             $Properties = $Resource.Properties
             $Nics = $Properties.networkProfile.networkinterfaces
@@ -1041,9 +1217,11 @@ $AllVNets.Values         | ForEach-Object { GetTFVirtualNetwork($_) }
 $AllVNets.Values.Subnets | ForEach-Object { GetTFSubnet($_) }
 $AllPIPs.Values          | ForEach-Object { GetTFPublicIP($_) }
 $AllNICs.Values          | ForEach-Object { GetTFNetInterface($_) }
+$AllNSGs.Values          | ForEach-Object { GetTFNetSecurityGroup($_) }
 $AllDisks.Values         | ForEach-Object { GetTFManagedDisk($_) }
 $AllVMs.Values           | ForEach-Object { GetTFWindowsVM($_) }
 $AllKeyVaults.Values     | ForEach-Object { GetTFKeyVault($_) }
+$AllLogWks.Values        | ForEach-Object { GetTFLogWorkspace($_) }
 $AllDisks.Values         | Where-Object {$_.VMId} | Sort-Object properties.storageprofile.datadisks.lun | ForEach-Object { GetTFDataDiskAttachment($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
