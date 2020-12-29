@@ -23,8 +23,9 @@ microsoft.network/networkinterfaces
 microsoft.network/connections
 microsoft.network/localnetworkgateways
 microsoft.network/virtualnetworkgateways
+microsoft.network/routetables
 microsoft.compute/availabilitysets
-microsoft.compute/virtualmachines (Windows so far)
+microsoft.compute/virtualmachines
 microsoft.compute/disks
 microsoft.keyvault/vaults
 microsoft.operationalinsights/workspaces
