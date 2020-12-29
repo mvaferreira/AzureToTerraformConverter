@@ -78,7 +78,7 @@ Function CheckDeps() {
     }
 }
 
-#CheckDeps
+CheckDeps
 
 $Resources = @()
 $ResourceGroups = @()
