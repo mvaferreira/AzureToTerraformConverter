@@ -26,9 +26,11 @@ microsoft.network/virtualnetworkgateways
 microsoft.network/routetables
 microsoft.compute/availabilitysets
 microsoft.compute/virtualmachines
+microsoft.compute/virtualmachines/extensions
 microsoft.compute/disks
 microsoft.keyvault/vaults
 microsoft.operationalinsights/workspaces
+microsoft.managedidentity/userassignedidentities
 ```
 
 PS C:\> **.\Convert_Az2TF.ps1 -SubscriptionID "<my_subscription_ID>"**

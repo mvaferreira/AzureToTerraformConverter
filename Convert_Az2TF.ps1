@@ -36,9 +36,12 @@ Disclaimer
         microsoft.network/virtualnetworkgateways
         microsoft.network/routetables
         microsoft.compute/availabilitysets
-        microsoft.compute/virtualmachines (Windows so far)
+        microsoft.compute/virtualmachines
+        microsoft.compute/virtualmachines/extensions
         microsoft.compute/disks
         microsoft.keyvault/vaults
+        microsoft.operationalinsights/workspaces
+        microsoft.managedidentity/userassignedidentities
     
     .EXAMPLE
         Run script with -SubscriptionID parameter.
@@ -84,28 +87,30 @@ $Resources = @()
 $ResourceGroups = @()
 
 Write-Host "[$(Get-Date)] Finding resources in subscription $($SubscriptionID)..."
-$Resources = az graph query -q "resources | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
+$Resources = az graph query -q "resources | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json | Sort Type
 $ResourceGroups = az graph query -q "resourceContainers | where subscriptionId == '$SubscriptionID' | order by id asc" --output json --only-show-errors | ConvertFrom-Json
 
 $TFDirectory = "terraform"
 $TFMainFile = "main.tf"
 $TFResourcesFile = "resources.tf"
 $TFImportFile = "terraform_import.cmd"
-$AllRGs = @{ }
-$AllNICs = @{ }
-$AllSTGs = @{ }
-$AllVMs = @{ }
-$AllVNets = @{ }
-$AllDisks = @{ }
-$AllPIPs = @{ }
-$AllAVSets = @{ }
-$AllGWs = @{ }
-$AllLocalGWs = @{ }
-$AllGWConnections = @{ }
-$AllKeyVaults = @{ }
-$AllLogWks = @{ }
-$AllNSGs = @{ }
-$AllRouteTables = @{ }
+$AllRGs = @{}
+$AllNICs = @{}
+$AllSTGs = @{}
+$AllVMs = @{}
+$AllVNets = @{}
+$AllDisks = @{}
+$AllPIPs = @{}
+$AllAVSets = @{}
+$AllGWs = @{}
+$AllLocalGWs = @{}
+$AllGWConnections = @{}
+$AllKeyVaults = @{}
+$AllLogWks = @{}
+$AllNSGs = @{}
+$AllRouteTables = @{}
+$AllIDs = @{}
+$AllVMExts = @{}
 $Global:TFResources = @()
 $Global:TFImport = @()
 $NL = "`r`n"
@@ -160,7 +165,7 @@ Function GetTFStorageAccount($Obj) {
     }
 
     If ($Obj.MinimumTlsVersion) {
-        $Global:TFResources += "  min_tls_version          = `"$($Obj.MinimumTlsVersion)`""
+        $Global:TFResources += "  min_tls_version = `"$($Obj.MinimumTlsVersion)`""
     }
 
     $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
@@ -656,7 +661,7 @@ Function GetTFDataDiskAttachment($Obj) {
     $DataDisks = $VM.properties.storageprofile.datadisks
     $VMDataDisk = $DataDisks | Where-Object {$_.managedDisk.id -eq $Obj.Id}
 
-    $Global:TFResources += "resource `"azurerm_virtual_machine_data_disk_attachment`" `"disk_att_$($Obj.Name)`" {" + $NL +
+    $Global:TFResources += "resource `"azurerm_virtual_machine_data_disk_attachment`" `"disk_att_$($VMDataDisk.Name)`" {" + $NL +
         "  managed_disk_id    = azurerm_managed_disk.disk_$($Obj.Name).id"
 
     If ($VMOsProfile.windowsConfiguration) {
@@ -669,8 +674,31 @@ Function GetTFDataDiskAttachment($Obj) {
         "  caching            = `"$($VMDataDisk.caching)`"" + $NL +
         "}" + $NL
 
-    $DiskAttId = "$($VM.Id)/dataDisks/$($Obj.Name)"
-    $Global:TFImport += "terraform import azurerm_virtual_machine_data_disk_attachment.disk_att_$($Obj.Name) $($DiskAttId)"    
+    $DiskAttId = "$($VM.Id)/dataDisks/$($VMDataDisk.Name)"
+    $Global:TFImport += "terraform import azurerm_virtual_machine_data_disk_attachment.disk_att_$($VMDataDisk.Name) $($DiskAttId)"    
+}
+
+Function GetTFIdentity($Obj) {
+    $Global:TFResources += "resource `"azurerm_user_assigned_identity`" `"id_$($Obj.Name)`" {" + $NL +
+        "  name                  = `"$($Obj.Name)`"" + $NL +
+        "  resource_group_name   = azurerm_resource_group.rg_$($Obj.ResourceGroup.Name).name" + $NL +
+        "  location              = `"$($Obj.Location)`""
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_user_assigned_identity.id_$($Obj.Name) $($Obj.Id)"    
 }
 
 Function GetTFLinuxVM($Obj) {
@@ -698,6 +726,28 @@ Function GetTFLinuxVM($Obj) {
     If ($AvSet) {
         $Global:TFResources += "  availability_set_id   = azurerm_availability_set.avset_$($AvSet.Name).id"
     }
+
+    If ($Obj.Identity) {
+        If ($Obj.Identity.type -eq "UserAssigned") {
+            $IDNames = @()
+            $IdentityIDs = ($Obj.Identity.userAssignedIdentities | Get-Member -MemberType "NoteProperty").Name
+
+            ForEach ($IdentityID In $IdentityIDs) {
+                $Split = $IdentityID -split '/'
+                $IDName = $Split[$Split.Count - 1]
+                $IDNames += "azurerm_user_assigned_identity.id_$($IDName).id"
+            }
+
+            $Global:TFResources += $NL + "  identity {" + $NL +
+            "    identity_ids = [`"$($IdentityIDs -join '`",`"')`"]" + $NL +
+            "    type         = `"$($Obj.Identity.type)`"" + $NL +
+            "  }"
+        } Else {
+            $Global:TFResources += $NL + "  identity {" + $NL +
+            "    type = `"$($Obj.Identity.type)`"" + $NL +
+            "  }"
+        }
+    }    
 
     If ($LinuxConfig.ssh.publicKeys) {
         $Global:TFResources += "  admin_ssh_key {" + $NL +
@@ -780,6 +830,28 @@ Function GetTFWindowsVM($Obj) {
     If ($AvSet) {
         $Global:TFResources += "  availability_set_id   = azurerm_availability_set.avset_$($AvSet.Name).id"
     }
+    
+    If ($Obj.Identity) {
+        If ($Obj.Identity.type -eq "UserAssigned") {
+            $IDNames = @()
+            $IdentityIDs = ($Obj.Identity.userAssignedIdentities | Get-Member -MemberType "NoteProperty").Name
+
+            ForEach ($IdentityID In $IdentityIDs) {
+                $Split = $IdentityID -split '/'
+                $IDName = $Split[$Split.Count - 1]
+                $IDNames += "azurerm_user_assigned_identity.id_$($IDName).id"
+            }
+
+            $Global:TFResources += $NL + "  identity {" + $NL +
+            "    identity_ids = [`"$($IdentityIDs -join '`",`"')`"]" + $NL +
+            "    type         = `"$($Obj.Identity.type)`"" + $NL +
+            "  }"
+        } Else {
+            $Global:TFResources += $NL + "  identity {" + $NL +
+            "    type = `"$($Obj.Identity.type)`"" + $NL +
+            "  }"
+        }
+    }
 
     If ($Obj.BootDiagnostics.enabled) {
         $Global:TFResources += $NL + "  boot_diagnostics {"
@@ -834,6 +906,47 @@ Function GetTFWindowsVM($Obj) {
     $Global:TFImport += "terraform import azurerm_windows_virtual_machine.wvm_$($Obj.Name) $($Obj.Id)"
 }
 
+Function GetTFVMExtension($Obj) {
+    $VM = $AllVMs.Values | Where-Object {$_.id -eq $Obj.VMId}
+    $ExtName = $VM.Name + "_" + $Obj.Name.ToString().Replace(".","")
+
+    $Global:TFResources += "resource `"azurerm_virtual_machine_extension`" `"vmext_$($ExtName)`" {" + $NL +
+        "  name                       = `"$($Obj.Name)`"" + $NL +
+        "  auto_upgrade_minor_version = $($Obj.AutoUpgradeMinorVersion.ToString().ToLower())"
+
+    If ($VM.OperatingSystem -eq "Windows") {
+        $Global:TFResources += "  virtual_machine_id = azurerm_windows_virtual_machine.wvm_$($Obj.VMName).id"
+    } Else {
+        $Global:TFResources += "  virtual_machine_id = azurerm_linux_virtual_machine.lvm_$($Obj.VMName).id"
+    }
+
+    $Global:TFResources += "  publisher = `"$($Obj.Publisher)`"" + $NL +
+        "  type                 = `"$($Obj.Type)`"" + $NL +
+        "  type_handler_version = `"$($Obj.TypeHandlerVersion)`""
+
+    If($Obj.Settings) {
+        $Global:TFResources += "  settings = <<SETTINGS" + $NL +
+        "   $($Obj.Settings | ConvertTo-Json -Compress -Depth 100)" + $NL +
+        "  SETTINGS"
+    }
+
+    $TagNames = $Obj.Tags | Get-Member -MemberType NoteProperty -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+
+    If($TagNames) {
+        $Global:TFResources += $NL + "  tags     = {"
+
+        ForEach($TagName In $TagNames) {
+            $Global:TFResources += "    $TagName = `"$($Obj.Tags.$TagName)`""
+        }
+
+        $Global:TFResources += "  }"
+    }
+
+    $Global:TFResources += "}" + $NL
+
+    $Global:TFImport += "terraform import azurerm_virtual_machine_extension.vmext_$($ExtName) $($Obj.Id)"
+}
+
 Function GetTFKeyVault($Obj) {
     $Global:TFResources += "resource `"azurerm_key_vault`" `"kvault_$($Obj.Name)`" {" + $NL +
         "  name                            = `"$($Obj.Name)`"" + $NL +
@@ -844,11 +957,6 @@ Function GetTFKeyVault($Obj) {
         "  enabled_for_template_deployment = $($Obj.EnabledForTemplateDeployment.ToString().ToLower())" + $NL +
         "  tenant_id                       = `"$($Obj.TenantID)`"" + $NL +
         "  sku_name                        = `"$($Obj.SkuName.ToString().ToLower())`""
-
-    If ($Obj.SoftDeleteRetentionInDays) {
-        $Global:TFResources += "  soft_delete_enabled         = true" + $NL +
-            "  soft_delete_retention_days  = `"$($Obj.SoftDeleteRetentionInDays)`""
-    }
 
     ForEach($AccessPolicy In $Obj.AccessPolicies) {
         $Global:TFResources += $NL + "  access_policy {" + $NL +
@@ -1324,6 +1432,61 @@ ForEach ($Resource In $Resources) {
             If (-Not $AllNSGs.Contains($Obj.Id)) { $AllNSGs.Add($Obj.Id, $Obj) }
         }
 
+        'microsoft.managedidentity/userassignedidentities' {
+            $Properties = $Resource.Properties
+
+            $Obj = [PSCustomObject]@{
+                Id            = $Resource.Id
+                Name          = $Resource.Name
+                Location      = $Resource.location
+                ResourceGroup = [PSCustomObject]@{
+                    Id        = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name      = $Resource.resourceGroup
+                }
+                ClientID      = $Properties.clientId
+                PrincipalID   = $Properties.principalId
+                TenantID      = $Properties.tenantId
+                Tags          = $Resource.tags
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllIDs.Contains($Obj.Id)) { $AllIDs.Add($Obj.Id, $Obj) }            
+        }
+
+        'microsoft.compute/virtualmachines/extensions' {
+            $Properties = $Resource.Properties
+            $Split = $Resource.id -split '/'
+            $VMName = $Split[$Split.Count - 3]
+
+            $Count = 0
+            For($I = [int]$Split.IndexOf($VMName) + 1; $I -lt $Split.Count; $I++) { 
+                $Count = $Count + $Split[$I].Length
+            }
+
+            $VMId = $Resource.Id.ToString().SubString(0, $Resource.Id.ToString().Length - $($Count + 2))
+
+            $Obj = [PSCustomObject]@{
+                Id                      = $Resource.Id
+                Name                    = $Resource.Name
+                Location                = $Resource.location
+                ResourceGroup           = [PSCustomObject]@{
+                    Id          	    = "/subscriptions/$($Resource.subscriptionId)/resourceGroups/$($Resource.resourceGroup)"
+                    Name                = $Resource.resourceGroup
+                }
+                VMName                  = $VMName
+                VMId                    = $VMId
+                Publisher               = $Properties.publisher
+                Type                    = $Properties.type
+                TypeHandlerVersion      = $Properties.typeHandlerVersion
+                AutoUpgradeMinorVersion = $Properties.autoUpgradeMinorVersion
+                Settings                = $Properties.settings
+                Tags                    = $Resource.tags
+            }
+
+            If (-Not $AllRGs.Contains($Obj.ResourceGroup.Id)) { $AllRGs.Add($Obj.ResourceGroup.Id, $Obj.ResourceGroup) }
+            If (-Not $AllVMExts.Contains($Obj.Id)) { $AllVMExts.Add($Obj.Id, $Obj) }    
+        }
+
         'microsoft.compute/virtualmachines' {
             $Properties = $Resource.Properties
             $Nics = $Properties.networkProfile.networkinterfaces
@@ -1363,6 +1526,7 @@ ForEach ($Resource In $Resources) {
                 Tags              = $Resource.tags
                 Priority          = $Properties.priority
                 EvictionPolicy    = $Properties.evictionPolicy
+                Identity          = $Resource.identity
             }
 
             ForEach ($Nic In $Nics) {
@@ -1446,13 +1610,15 @@ $AllVNets.Values.Subnets | ForEach-Object { GetTFSubnet($_) }
 $AllPIPs.Values          | ForEach-Object { GetTFPublicIP($_) }
 $AllNICs.Values          | ForEach-Object { GetTFNetInterface($_) }
 $AllNSGs.Values          | ForEach-Object { GetTFNetSecurityGroup($_) }
-$AllDisks.Values         | ForEach-Object { GetTFManagedDisk($_) }
 $AllRouteTables.Values   | ForEach-Object { GetTFRouteTable($_) }
+$AllDisks.Values         | ForEach-Object { GetTFManagedDisk($_) }
+$AllDisks.Values         | Where-Object {$_.VMId} | Sort-Object properties.storageprofile.datadisks.lun | ForEach-Object { GetTFDataDiskAttachment($_) }
+$AllIDs.Values           | ForEach-Object { GetTFIdentity($_) }
 $AllVMs.Values           | Where-Object {$_.OperatingSystem -eq "Windows"} | ForEach-Object { GetTFWindowsVM($_) }
 $AllVMs.Values           | Where-Object {$_.OperatingSystem -eq "Linux"} | ForEach-Object { GetTFLinuxVM($_) }
+$AllVMExts.Values        | ForEach-Object { GetTFVMExtension($_) }
 $AllKeyVaults.Values     | ForEach-Object { GetTFKeyVault($_) }
 $AllLogWks.Values        | ForEach-Object { GetTFLogWorkspace($_) }
-$AllDisks.Values         | Where-Object {$_.VMId} | Sort-Object properties.storageprofile.datadisks.lun | ForEach-Object { GetTFDataDiskAttachment($_) }
 
 $null = New-Item -Name $TFResourcesFile -Path (Join-Path (Get-Location).Path $TFDirectory) -Type File -Value ($TFResources -Join $NL) -Force
 
